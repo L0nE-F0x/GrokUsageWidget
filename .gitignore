@@ -1,0 +1,37 @@
+﻿# Dependencies / build
+node_modules/
+dist/
+src-tauri/target/
+**/target/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log
+
+# Local env / secrets
+.env
+.env.*
+
+# App runtime data
+playwright-profile/
+**/playwright-profile/
+
+# Local build artifacts / duplicates (site hosts the installer)
+Grok Usage Setup.exe
+portable/Grok Usage.exe
+portable/*.exe
+
+# Icon generation scratch
+app-icon-src/from-exe/
+app-icon-src/*preview*
+app-icon-src/from-ico.png
+app-icon-src/shell-extracted*
+app-icon-src/test.png
+app-icon-src/remove_mock.py
+app-icon-src/fix_and_bump.py
+
+# Misc
+*.pdb

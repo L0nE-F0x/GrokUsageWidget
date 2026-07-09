@@ -1,0 +1,21 @@
+[package]
+name = "grok-usage-widget"
+version = "0.1.1"
+description = "Personal Windows widget for Grok Weekly SuperGrok usage"
+authors = ["you"]
+edition = "2021"
+
+[lib]
+name = "grok_usage_widget_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+tokio = { version = "1", features = ["time", "process", "io-util", "rt-multi-thread", "macros"] }

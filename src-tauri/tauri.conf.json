@@ -1,0 +1,55 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Grok Usage",
+  "version": "0.1.1",
+  "identifier": "com.personal.grok-usage-widget",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Grok Usage",
+        "width": 320,
+        "height": 500,
+        "minWidth": 280,
+        "minHeight": 360,
+        "resizable": true,
+        "decorations": false,
+        "transparent": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": false,
+        "center": false,
+        "visible": true,
+        "shadow": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.png",
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "resources/scrape/*"
+    ],
+    "longDescription": "Personal Windows widget for Weekly SuperGrok usage. Live data uses a local Playwright scrape runtime (bootstrapped on first refresh into AppData).",
+    "shortDescription": "Grok Weekly SuperGrok usage widget",
+    "publisher": "Personal",
+    "category": "Utility"
+  }
+}

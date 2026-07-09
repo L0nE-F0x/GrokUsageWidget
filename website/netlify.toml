@@ -1,0 +1,18 @@
+# Deploy this folder as the Netlify site (Base directory: website)
+# or set Publish directory to "website" at the repo root.
+
+[build]
+  publish = "."
+
+[[headers]]
+  for = "/downloads/*"
+  [headers.values]
+    Content-Disposition = "attachment"
+    Cache-Control = "public, max-age=3600"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"

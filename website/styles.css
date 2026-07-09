@@ -1,0 +1,270 @@
+:root {
+  --bg: #0c0c0e;
+  --bg-elevated: #141418;
+  --bg-hover: #1c1c22;
+  --border: #2a2a32;
+  --text: #f2f2f4;
+  --text-muted: #8b8b96;
+  --accent: #d4a017;
+  --accent-soft: rgba(212, 160, 23, 0.15);
+  --radius: 14px;
+  --font: "Segoe UI", system-ui, -apple-system, sans-serif;
+  --max: 920px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  min-height: 100vh;
+  font-family: var(--font);
+  color: var(--text);
+  background: linear-gradient(165deg, #121216 0%, var(--bg) 45%, #08080a 100%);
+  line-height: 1.55;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+.bg-glow {
+  position: fixed;
+  inset: -20% auto auto 50%;
+  width: min(900px, 100vw);
+  height: 520px;
+  transform: translateX(-50%);
+  background: radial-gradient(
+    ellipse at center,
+    rgba(212, 160, 23, 0.14),
+    transparent 65%
+  );
+  pointer-events: none;
+  z-index: 0;
+}
+
+.top,
+main,
+footer {
+  position: relative;
+  z-index: 1;
+}
+
+.top {
+  max-width: var(--max);
+  margin: 0 auto;
+  padding: 1.25rem 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.brand-icon {
+  border-radius: 9px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+.nav-link {
+  color: var(--text-muted);
+  font-size: 0.95rem;
+}
+
+.nav-link:hover {
+  color: var(--text);
+  text-decoration: none;
+}
+
+main {
+  max-width: var(--max);
+  margin: 0 auto;
+  padding: 1rem 1.5rem 4rem;
+}
+
+.hero {
+  padding: 2.5rem 0 2rem;
+}
+
+.eyebrow {
+  color: var(--accent);
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 0.85rem;
+}
+
+.hero h1 {
+  font-size: clamp(1.85rem, 4.5vw, 2.75rem);
+  line-height: 1.15;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  max-width: 16ch;
+  margin-bottom: 1rem;
+}
+
+.lead {
+  color: var(--text-muted);
+  font-size: 1.08rem;
+  max-width: 48ch;
+  margin-bottom: 1.75rem;
+}
+
+.cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.75rem 1.25rem;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 0.98rem;
+  border: 1px solid transparent;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+  text-decoration: none;
+}
+
+.btn:hover {
+  text-decoration: none;
+  transform: translateY(-1px);
+}
+
+.btn.primary {
+  background: var(--accent);
+  color: #14120a;
+}
+
+.btn.primary:hover {
+  background: #e0b02a;
+}
+
+.btn.ghost {
+  background: transparent;
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.btn.ghost:hover {
+  background: var(--bg-hover);
+  border-color: #3a3a44;
+}
+
+.btn.large {
+  margin-top: 1.5rem;
+  padding: 0.9rem 1.5rem;
+}
+
+.meta {
+  color: var(--text-muted);
+  font-size: 0.88rem;
+}
+
+.features {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+  margin: 2rem 0 3rem;
+}
+
+.card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.25rem 1.2rem;
+}
+
+.card h2 {
+  font-size: 1.05rem;
+  margin-bottom: 0.45rem;
+}
+
+.card p {
+  color: var(--text-muted);
+  font-size: 0.95rem;
+}
+
+.install {
+  background: linear-gradient(160deg, rgba(212, 160, 23, 0.08), transparent 50%),
+    var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) + 4px);
+  padding: 1.75rem 1.5rem 2rem;
+}
+
+.install h2 {
+  font-size: 1.4rem;
+  margin-bottom: 1rem;
+}
+
+.install ol {
+  padding-left: 1.25rem;
+  color: var(--text-muted);
+  display: grid;
+  gap: 0.7rem;
+}
+
+.install ol strong,
+.install ol em {
+  color: var(--text);
+  font-style: normal;
+}
+
+.note {
+  margin-top: 1.25rem;
+  padding: 1rem 1.1rem;
+  background: var(--accent-soft);
+  border: 1px solid rgba(212, 160, 23, 0.25);
+  border-radius: 10px;
+  display: grid;
+  gap: 0.6rem;
+  font-size: 0.92rem;
+  color: var(--text-muted);
+}
+
+.note strong {
+  color: var(--text);
+}
+
+footer {
+  max-width: var(--max);
+  margin: 0 auto;
+  padding: 0 1.5rem 2.5rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+@media (max-width: 560px) {
+  .hero {
+    padding-top: 1.25rem;
+  }
+
+  .cta-row .btn {
+    width: 100%;
+  }
+}

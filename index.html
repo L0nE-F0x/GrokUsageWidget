@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Grok Usage</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+  <body>
+    <div id="app" class="widget">
+      <header class="titlebar" data-tauri-drag-region>
+        <div class="titlebar-left" data-tauri-drag-region>
+          <span class="logo-mark" data-tauri-drag-region aria-hidden="true">&#10022;</span>
+          <h1 data-tauri-drag-region>Weekly SuperGrok Limit</h1>
+        </div>
+        <div class="titlebar-actions">
+          <button type="button" id="btn-pin" class="icon-btn" title="Keep on top of other windows" aria-label="Keep on top">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 17v5M9 10.76V3h6v7.76l4 4.24V17H5v-2l4-4.24z"/>
+            </svg>
+          </button>
+          <button type="button" id="btn-settings" class="icon-btn" title="Settings" aria-label="Settings">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+            </svg>
+          </button>
+          <button type="button" id="btn-minimize" class="icon-btn" title="Hide to system tray" aria-label="Hide">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M5 12h14"/>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- First-time / not connected setup -->
+      <section id="state-setup" class="setup-panel hidden">
+        <div class="setup-hero">
+          <p class="setup-emoji" aria-hidden="true">&#10022;</p>
+          <h2>Welcome</h2>
+          <p class="setup-lead">
+            This widget shows your <strong>Weekly SuperGrok</strong> usage
+            without opening grok.com every time.
+          </p>
+        </div>
+        <ol class="setup-steps">
+          <li>Click the button below</li>
+          <li>A browser window opens — <strong>sign in</strong> to grok.com</li>
+          <li>Wait until your usage numbers appear</li>
+          <li>You only need to do this once</li>
+        </ol>
+        <p class="setup-note">First time can take a few minutes while tools download. Stay online.</p>
+        <button type="button" id="btn-connect" class="btn primary">Connect my Grok account</button>
+      </section>
+
+      <section id="state-loading" class="state-panel hidden">
+        <div class="spinner" aria-hidden="true"></div>
+        <p id="loading-title">Getting your usage…</p>
+        <p id="loading-hint" class="hint-line">This can take a minute. A browser may open so you can sign in.</p>
+      </section>
+
+      <section id="state-error" class="state-panel hidden">
+        <p class="error-title">Something went wrong</p>
+        <p id="error-message" class="error-message"></p>
+        <button type="button" id="btn-retry" class="btn primary">Try again</button>
+        <button type="button" id="btn-error-setup" class="btn secondary">Back to setup</button>
+      </section>
+
+      <section id="state-content" class="content hidden">
+        <div class="overall">
+          <div class="overall-header">
+            <span id="overall-label" class="overall-label">used</span>
+            <span id="overall-percent" class="overall-percent">--</span>
+          </div>
+          <div class="progress overall-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100">
+            <div id="overall-fill" class="progress-fill"></div>
+          </div>
+        </div>
+
+        <ul id="category-list" class="categories" aria-label="Usage by category"></ul>
+
+        <div class="reset-block">
+          <p id="resets-date" class="resets-in">Resets --</p>
+          <p id="resets-time" class="resets-at"></p>
+        </div>
+
+        <div id="credits-block" class="credits-block hidden">
+          <span class="credits-label">Extra usage credits</span>
+          <span id="credits-value" class="credits-value">--</span>
+        </div>
+
+        <div class="footer-row">
+          <span id="last-updated" class="last-updated">--</span>
+          <button type="button" id="btn-refresh" class="btn secondary compact">Refresh</button>
+        </div>
+
+        <p id="data-note" class="data-note hidden"></p>
+
+        <div class="actions">
+          <button type="button" id="btn-open-usage" class="btn primary">Open usage on grok.com</button>
+        </div>
+      </section>
+
+      <section id="settings-panel" class="settings-panel hidden">
+        <h2>Settings</h2>
+        <p class="settings-intro">Simple options — most people only need the first few.</p>
+
+        <label class="field">
+          <span>Update my numbers every</span>
+          <div class="field-row">
+            <input type="number" id="set-refresh" min="0" max="120" step="1" />
+            <span class="field-suffix">minutes</span>
+          </div>
+          <span class="hint">Use 0 if you only want to refresh by hand</span>
+        </label>
+
+        <label class="field checkbox">
+          <input type="checkbox" id="set-aot" />
+          <span>Keep this window on top of other apps</span>
+        </label>
+
+        <label class="field checkbox">
+          <input type="checkbox" id="set-headed" />
+          <span>Show a browser window when I need to sign in</span>
+        </label>
+
+        <label class="field checkbox">
+          <input type="checkbox" id="set-always-headed" />
+          <span>Always show the browser when refreshing</span>
+        </label>
+        <p class="hint settings-hint-block">
+          Turn this on if sign-in is failing and you want to watch what happens.
+          Turn it off once things work so refreshes stay in the background.
+        </p>
+
+        <details class="advanced">
+          <summary>Advanced (optional)</summary>
+          <label class="field">
+            <span>Which browser to use</span>
+            <select id="set-channel">
+              <option value="">Built-in browser (recommended)</option>
+              <option value="chrome">Google Chrome (must be installed)</option>
+              <option value="msedge">Microsoft Edge (must be installed)</option>
+            </select>
+            <span class="hint">Built-in is simplest. Chrome/Edge only if you prefer them.</span>
+          </label>
+          <label class="field">
+            <span>Custom sign-in data folder</span>
+            <input type="text" id="set-profile" placeholder="Leave blank for the default (recommended)" />
+            <span class="hint" id="default-profile-hint">Most people should leave this blank.</span>
+          </label>
+        </details>
+
+        <div class="settings-actions">
+          <button type="button" id="btn-settings-save" class="btn primary">Save</button>
+          <button type="button" id="btn-settings-cancel" class="btn secondary">Back</button>
+        </div>
+      </section>
+    </div>
+  </body>
+</html>
