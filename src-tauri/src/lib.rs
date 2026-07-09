@@ -143,8 +143,66 @@ fn apply_window_mode(window: &WebviewWindow, compact: bool) -> Result<(), String
             .map_err(|e| e.to_string())?;
         window.set_resizable(true).map_err(|e| e.to_string())?;
     }
+    // Clip native window shape so square host corners never stick past the pill/card.
+    apply_rounded_region(window, compact);
     Ok(())
 }
+
+/// Clip the HWND to a rounded rect (full mode) or full pill (compact).
+/// CSS border-radius alone cannot cut opaque host pixels; Win32 region does.
+#[cfg(windows)]
+fn apply_rounded_region(window: &WebviewWindow, compact: bool) {
+    // Direct FFI avoids flaky windows-rs feature gating for SetWindowRgn.
+    #[link(name = "gdi32")]
+    extern "system" {
+        fn CreateRoundRectRgn(
+            x1: i32,
+            y1: i32,
+            x2: i32,
+            y2: i32,
+            w: i32,
+            h: i32,
+        ) -> isize;
+    }
+    #[link(name = "user32")]
+    extern "system" {
+        fn SetWindowRgn(hwnd: isize, hrgn: isize, b_redraw: i32) -> i32;
+    }
+
+    let Ok(hwnd) = window.hwnd() else {
+        return;
+    };
+    let Ok(size) = window.outer_size() else {
+        return;
+    };
+    let w = size.width as i32;
+    let h = size.height as i32;
+    if w <= 1 || h <= 1 {
+        return;
+    }
+
+    // CreateRoundRectRgn ellipse width/height = corner diameter.
+    let (ellipse_w, ellipse_h) = if compact {
+        // True pill: radius = half the bar height.
+        (h, h)
+    } else {
+        let scale = window.scale_factor().unwrap_or(1.0);
+        // Match CSS --radius: 12px (logical → physical).
+        let diameter = ((12.0 * scale).round() as i32 * 2).max(2);
+        (diameter, diameter)
+    };
+
+    unsafe {
+        let hrgn = CreateRoundRectRgn(0, 0, w, h, ellipse_w, ellipse_h);
+        if hrgn != 0 {
+            // b_redraw = TRUE → system owns the region handle.
+            let _ = SetWindowRgn(hwnd.0 as isize, hrgn, 1);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn apply_rounded_region(_window: &WebviewWindow, _compact: bool) {}
 
 fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
@@ -273,6 +331,14 @@ pub fn run() {
                 }
                 WindowEvent::Moved(pos) => {
                     persist_position(window.app_handle(), pos.x, pos.y);
+                }
+                WindowEvent::Resized(_) => {
+                    // Keep the clip region in sync when the user resizes full mode.
+                    let app = window.app_handle();
+                    let compact = settings::load_settings(app).compact_mode;
+                    if let Some(w) = app.get_webview_window("main") {
+                        apply_rounded_region(&w, compact);
+                    }
                 }
                 _ => {}
             }
