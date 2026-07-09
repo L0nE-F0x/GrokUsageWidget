@@ -43,6 +43,8 @@ interface AppSettings {
   setupComplete?: boolean;
   windowX?: number | null;
   windowY?: number | null;
+  /** Compact sleek pill window */
+  compactMode?: boolean;
 }
 
 const IN_TAURI = isTauri();
@@ -62,11 +64,16 @@ const $ = <T extends HTMLElement>(id: string) =>
   document.getElementById(id) as T | null;
 
 const els = {
+  app: $("app"),
   setup: $("state-setup"),
   loading: $("state-loading"),
   error: $("state-error"),
   content: $("state-content"),
   settings: $("settings-panel"),
+  sleekBar: $("sleek-bar"),
+  sleekPercent: $("sleek-percent"),
+  sleekFill: $("sleek-fill"),
+  sleekLabel: $("sleek-label"),
   errorMsg: $("error-message"),
   loadingTitle: $("loading-title"),
   loadingHint: $("loading-hint"),
@@ -85,6 +92,8 @@ const els = {
   btnErrorSetup: $("btn-error-setup") as HTMLButtonElement | null,
   btnOpenUsage: $("btn-open-usage") as HTMLButtonElement | null,
   btnPin: $("btn-pin") as HTMLButtonElement | null,
+  btnCompact: $("btn-compact") as HTMLButtonElement | null,
+  btnSleekExpand: $("btn-sleek-expand") as HTMLButtonElement | null,
   btnSettings: $("btn-settings") as HTMLButtonElement | null,
   btnMinimize: $("btn-minimize") as HTMLButtonElement | null,
   btnSettingsSave: $("btn-settings-save") as HTMLButtonElement | null,
@@ -107,9 +116,11 @@ let settings: AppSettings = {
   headedForLogin: true,
   alwaysHeaded: false,
   setupComplete: false,
+  compactMode: false,
 };
 let lastFetchedAt: Date | null = null;
 let lastWasLive = false;
+let lastOverallPercent: number | null = null;
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
 let loading = false;
 
@@ -118,11 +129,17 @@ let loading = false;
 type Panel = "setup" | "loading" | "error" | "content" | "settings";
 
 function showPanel(which: Panel) {
+  // In compact mode only content (via sleek bar) is useful; force expand for other panels.
+  if (settings.compactMode && which !== "content") {
+    void setCompactMode(false, { skipPanel: true });
+  }
+
   els.setup?.classList.toggle("hidden", which !== "setup");
   els.loading?.classList.toggle("hidden", which !== "loading");
   els.error?.classList.toggle("hidden", which !== "error");
   els.content?.classList.toggle("hidden", which !== "content");
   els.settings?.classList.toggle("hidden", which !== "settings");
+  syncCompactUi();
 }
 
 function levelClass(percent: number): string {
@@ -188,6 +205,87 @@ function friendlyError(raw: string): string {
   return raw.length > 400 ? raw.slice(0, 400) + "…" : raw;
 }
 
+async function updateTrayTooltip(percent: number | null, resetsHint?: string) {
+  if (!IN_TAURI) return;
+  let text = "Grok Usage";
+  if (percent != null && !Number.isNaN(percent)) {
+    const pct = Math.round(percent);
+    text = `${pct}% SuperGrok used`;
+    if (resetsHint) text += ` · Resets ${resetsHint}`;
+  }
+  try {
+    await invoke("set_tray_tooltip", { text });
+  } catch (e) {
+    console.error("tray tooltip", e);
+  }
+}
+
+function syncCompactUi() {
+  const compact = !!settings.compactMode;
+  els.app?.classList.toggle("compact", compact);
+  els.btnCompact?.classList.toggle("active", compact);
+  els.btnCompact?.setAttribute(
+    "title",
+    compact ? "Exit sleek mode" : "Sleek mode — compact pill while you code"
+  );
+  els.btnCompact?.setAttribute(
+    "aria-label",
+    compact ? "Exit sleek mode" : "Sleek mode"
+  );
+
+  // Sleek bar only when compact + we have content data
+  const showSleek =
+    compact && lastOverallPercent != null && els.content && !els.content.classList.contains("hidden");
+  // When compact, content section is hidden via CSS; sleek bar replaces it
+  if (compact && lastOverallPercent != null) {
+    els.sleekBar?.classList.remove("hidden");
+  } else {
+    els.sleekBar?.classList.add("hidden");
+  }
+  void showSleek;
+}
+
+function updateSleekBar(percent: number, resetsHint: string) {
+  const pct = Math.round(percent);
+  if (els.sleekPercent) els.sleekPercent.textContent = `${pct}%`;
+  if (els.sleekFill) {
+    els.sleekFill.style.width = `${Math.min(100, percent)}%`;
+    els.sleekFill.className = `sleek-fill ${levelClass(percent)}`;
+  }
+  if (els.sleekLabel) {
+    els.sleekLabel.textContent = resetsHint ? `Resets ${resetsHint}` : "used";
+  }
+}
+
+async function setCompactMode(
+  enabled: boolean,
+  opts?: { skipPanel?: boolean }
+): Promise<void> {
+  if (!IN_TAURI) {
+    settings.compactMode = enabled;
+    syncCompactUi();
+    return;
+  }
+
+  // Need live data before going sleek
+  if (enabled && lastOverallPercent == null) {
+    return;
+  }
+
+  try {
+    const next = await invoke<AppSettings>("set_compact_mode", { enabled });
+    settings = next;
+    syncPinButton();
+    if (els.setAot) els.setAot.checked = settings.alwaysOnTop;
+    syncCompactUi();
+    if (enabled && !opts?.skipPanel) {
+      showPanel("content");
+    }
+  } catch (e) {
+    console.error(e);
+  }
+}
+
 function renderUsage(data: UsageSnapshot) {
   const pct = Math.round(data.overallPercent);
 
@@ -222,6 +320,12 @@ function renderUsage(data: UsageSnapshot) {
     els.resetsTime.textContent = time ? `at ${time}` : "";
   }
 
+  // Short hint for tray + sleek bar (prefer date only)
+  const resetsHint = (data.resetsDate || data.resetsDisplay || "").trim();
+  lastOverallPercent = data.overallPercent;
+  updateSleekBar(data.overallPercent, resetsHint);
+  void updateTrayTooltip(data.overallPercent, resetsHint);
+
   const credits = data.extraCredits;
   const hasCredits = credits != null && !Number.isNaN(credits);
   if (els.creditsBlock) {
@@ -247,6 +351,7 @@ function renderUsage(data: UsageSnapshot) {
   lastWasLive = true;
   updateLastUpdatedLabel();
   showPanel("content");
+  syncCompactUi();
 }
 
 // -- Settings / fetch -------------------------------------------------------
@@ -255,6 +360,7 @@ async function loadSettings() {
   if (!IN_TAURI) {
     syncSettingsForm();
     syncPinButton();
+    syncCompactUi();
     return;
   }
   try {
@@ -262,8 +368,10 @@ async function loadSettings() {
     settings.headedForLogin ??= true;
     settings.alwaysHeaded ??= false;
     settings.setupComplete ??= false;
+    settings.compactMode ??= false;
     syncSettingsForm();
     syncPinButton();
+    syncCompactUi();
     scheduleAutoRefresh();
   } catch (e) {
     console.error(e);
@@ -311,7 +419,10 @@ async function refreshUsage(showLoading = true, opts?: { connecting?: boolean })
   loading = true;
   if (els.btnRefresh) els.btnRefresh.disabled = true;
 
-  if (showLoading) {
+  // Quiet refresh while in sleek mode — keep the pill visible (no loading panel)
+  const quietCompact = settings.compactMode && !showLoading;
+
+  if (showLoading && !quietCompact) {
     showPanel("loading");
     if (els.loadingTitle) {
       els.loadingTitle.textContent = opts?.connecting
@@ -375,6 +486,7 @@ async function startConnectFlow() {
     headedForLogin: true,
     alwaysHeaded: true,
     setupComplete: false,
+    compactMode: false,
   };
   try {
     await persistSettings(next);
@@ -459,6 +571,19 @@ function wireEvents() {
     }
   });
 
+  els.btnCompact?.addEventListener("click", () => {
+    if (!lastWasLive && lastOverallPercent == null) {
+      // No data yet — can't go sleek
+      return;
+    }
+    void setCompactMode(!settings.compactMode);
+  });
+
+  els.btnSleekExpand?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    void setCompactMode(false);
+  });
+
   els.btnMinimize?.addEventListener("click", () => {
     if (IN_TAURI) void invoke("hide_window");
   });
@@ -486,6 +611,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   setInterval(updateLastUpdatedLabel, 15_000);
 
   await loadSettings();
+  void updateTrayTooltip(null);
 
   if (!IN_TAURI) {
     showPanel("setup");
@@ -493,11 +619,20 @@ window.addEventListener("DOMContentLoaded", async () => {
   }
 
   if (!settings.setupComplete) {
+    // Don't start in compact until connected
+    if (settings.compactMode) {
+      await setCompactMode(false);
+    }
     showPanel("setup");
     return;
   }
 
   await refreshUsage(true);
+
+  // After first data, re-apply compact if user left it on
+  if (settings.compactMode && lastOverallPercent != null) {
+    await setCompactMode(true);
+  }
 
   if (IN_TAURI) {
     try {

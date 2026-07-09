@@ -14,7 +14,7 @@ pub struct CategoryUsage {
     /// Quota limit when known; otherwise 0.
     #[serde(default)]
     pub limit: f64,
-    /// 0.0 – 100.0 percentage of quota consumed.
+    /// 0.0 - 100.0 percentage of quota consumed.
     pub percent: f64,
     #[serde(default)]
     pub unit: Option<String>,
@@ -24,7 +24,7 @@ pub struct CategoryUsage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageSnapshot {
-    /// Overall weekly SuperGrok usage percentage (0–100).
+    /// Overall weekly SuperGrok usage percentage (0-100).
     pub overall_percent: f64,
     pub categories: Vec<CategoryUsage>,
     /// Human-readable reset date, e.g. "July 12, 2026".
@@ -83,6 +83,9 @@ pub struct AppSettings {
     pub window_x: Option<i32>,
     #[serde(default)]
     pub window_y: Option<i32>,
+    /// Compact "sleek" pill window for keeping usage visible while coding.
+    #[serde(default)]
+    pub compact_mode: bool,
 }
 
 fn default_true() -> bool {
@@ -101,6 +104,7 @@ impl Default for AppSettings {
             setup_complete: false,
             window_x: None,
             window_y: None,
+            compact_mode: false,
         }
     }
 }

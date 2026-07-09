@@ -20,6 +20,12 @@
               <path d="M12 17v5M9 10.76V3h6v7.76l4 4.24V17H5v-2l4-4.24z"/>
             </svg>
           </button>
+          <button type="button" id="btn-compact" class="icon-btn" title="Sleek mode — compact pill while you code" aria-label="Sleek mode">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="8" width="18" height="8" rx="4"/>
+              <path d="M8 12h8"/>
+            </svg>
+          </button>
           <button type="button" id="btn-settings" class="icon-btn" title="Settings" aria-label="Settings">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="12" cy="12" r="3"/>
@@ -33,6 +39,21 @@
           </button>
         </div>
       </header>
+
+      <!-- Sleek / compact pill strip (shown only in compact mode) -->
+      <div id="sleek-bar" class="sleek-bar hidden" data-tauri-drag-region>
+        <span class="sleek-mark" data-tauri-drag-region aria-hidden="true">&#10022;</span>
+        <span id="sleek-percent" class="sleek-percent" data-tauri-drag-region>––%</span>
+        <div class="sleek-track" data-tauri-drag-region aria-hidden="true">
+          <div id="sleek-fill" class="sleek-fill"></div>
+        </div>
+        <span id="sleek-label" class="sleek-label" data-tauri-drag-region>used</span>
+        <button type="button" id="btn-sleek-expand" class="icon-btn sleek-expand" title="Expand to full widget" aria-label="Expand">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/>
+          </svg>
+        </button>
+      </div>
 
       <!-- First-time / not connected setup -->
       <section id="state-setup" class="setup-panel hidden">
@@ -71,7 +92,7 @@
         <div class="overall">
           <div class="overall-header">
             <span id="overall-label" class="overall-label">used</span>
-            <span id="overall-percent" class="overall-percent">--</span>
+            <span id="overall-percent" class="overall-percent">––</span>
           </div>
           <div class="progress overall-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100">
             <div id="overall-fill" class="progress-fill"></div>
@@ -81,17 +102,17 @@
         <ul id="category-list" class="categories" aria-label="Usage by category"></ul>
 
         <div class="reset-block">
-          <p id="resets-date" class="resets-in">Resets --</p>
+          <p id="resets-date" class="resets-in">Resets ––</p>
           <p id="resets-time" class="resets-at"></p>
         </div>
 
         <div id="credits-block" class="credits-block hidden">
           <span class="credits-label">Extra usage credits</span>
-          <span id="credits-value" class="credits-value">--</span>
+          <span id="credits-value" class="credits-value">––</span>
         </div>
 
         <div class="footer-row">
-          <span id="last-updated" class="last-updated">--</span>
+          <span id="last-updated" class="last-updated">––</span>
           <button type="button" id="btn-refresh" class="btn secondary compact">Refresh</button>
         </div>
 

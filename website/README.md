@@ -1,24 +1,29 @@
 # Grok Usage — download site
 
-Static landing page for the **Grok Usage** Windows widget.
+Static landing page + Windows installer. **No Node build.**
 
-## Netlify
+## Netlify (important)
 
-1. New site from Git → this repo
-2. **Base directory:** `website` (if the repo also contains the app source)
-3. **Publish directory:** `.` (relative to base) or `website` if base is empty
-4. Deploy
+This monorepo also contains the Tauri app source. Netlify must **not** use the root `package.json` (it would install Playwright and hang).
 
-Put the installer at:
+### Recommended settings
+
+| Setting | Value |
+|--------|--------|
+| Base directory | `website` |
+| Build command | *(empty)* or leave as in `netlify.toml` |
+| Publish directory | `.` (relative to base) |
+
+The **root** `netlify.toml` sets `base = "website"` so deploys stay static even if UI settings are wrong.
+
+### After changing Netlify config
+
+Trigger a clear cache and redeploy once.
+
+## Installer
 
 ```text
 website/downloads/Grok-Usage-Setup.exe
 ```
 
-## Local preview
-
-Open `index.html` in a browser, or:
-
-```bash
-npx serve website
-```
+Replace this file when you ship a new app build, then commit + push.

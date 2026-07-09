@@ -1,0 +1,26 @@
+# Netlify: deploy ONLY the static marketing / download site.
+# Do NOT build the Tauri app or install root package.json deps.
+
+[build]
+  # All site files live here (no package.json → no npm install)
+  base = "website"
+  publish = "."
+  # Explicit no-op so Netlify never tries npm run build from the monorepo root
+  command = "echo Static website — no build step"
+
+[build.environment]
+  # Skip any automatic dependency install heuristics
+  NODE_VERSION = "20"
+
+[[headers]]
+  for = "/downloads/*"
+  [headers.values]
+    Content-Disposition = "attachment"
+    Cache-Control = "public, max-age=3600"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"

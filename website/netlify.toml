@@ -1,8 +1,9 @@
-# Deploy this folder as the Netlify site (Base directory: website)
-# or set Publish directory to "website" at the repo root.
+# Used when Netlify "Base directory" is set to `website` in the UI.
+# Prefer the root netlify.toml (base = "website") so deploys never touch the app package.json.
 
 [build]
   publish = "."
+  command = "echo Static website — no build step"
 
 [[headers]]
   for = "/downloads/*"

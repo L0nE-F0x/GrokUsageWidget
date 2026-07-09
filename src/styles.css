@@ -608,3 +608,102 @@ body {
 .state-panel .btn + .btn {
   margin-top: 4px;
 }
+
+/* ==========================================================================
+   Sleek / compact pill mode
+   ========================================================================== */
+
+.widget.compact {
+  border-radius: 999px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+  background: linear-gradient(165deg, #16161c 0%, var(--bg) 60%, #0a0a0c 100%);
+}
+
+.widget.compact .titlebar,
+.widget.compact .setup-panel,
+.widget.compact .state-panel,
+.widget.compact .content,
+.widget.compact .settings-panel {
+  display: none !important;
+}
+
+.widget.compact .sleek-bar {
+  display: flex !important;
+}
+
+.sleek-bar {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 100%;
+  padding: 0 8px 0 14px;
+  cursor: grab;
+}
+
+.sleek-bar:active {
+  cursor: grabbing;
+}
+
+.sleek-mark {
+  color: var(--accent);
+  font-size: 13px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.sleek-percent {
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  min-width: 2.6ch;
+  flex-shrink: 0;
+}
+
+.sleek-track {
+  flex: 1;
+  height: 6px;
+  min-width: 48px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.sleek-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #c9a227, #e8c547);
+  transition: width 0.45s cubic-bezier(0.22, 1, 0.36, 1), background 0.3s;
+}
+
+.sleek-fill.level-ok {
+  background: linear-gradient(90deg, #2a9d6e, #3ecf8e);
+}
+
+.sleek-fill.level-mid {
+  background: linear-gradient(90deg, #c9a227, #e8b84a);
+}
+
+.sleek-fill.level-high {
+  background: linear-gradient(90deg, #e07a3a, #f07178);
+}
+
+.sleek-label {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
+  max-width: 7rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sleek-expand {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+}

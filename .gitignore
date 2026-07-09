@@ -1,4 +1,4 @@
-﻿# Dependencies / build
+# Dependencies / build outputs (never commit)
 node_modules/
 dist/
 src-tauri/target/
@@ -11,27 +11,30 @@ Thumbs.db
 .idea/
 *.log
 
-# Local env / secrets
+# Env / secrets
 .env
 .env.*
 
-# App runtime data
+# Runtime / user data
 playwright-profile/
 **/playwright-profile/
 
-# Local build artifacts / duplicates (site hosts the installer)
+# Local installers & portable copies (site serves website/downloads/)
 Grok Usage Setup.exe
-portable/Grok Usage.exe
-portable/*.exe
+portable/
+*.exe
+!website/downloads/*.exe
 
-# Icon generation scratch
-app-icon-src/from-exe/
-app-icon-src/*preview*
-app-icon-src/from-ico.png
-app-icon-src/shell-extracted*
-app-icon-src/test.png
-app-icon-src/remove_mock.py
-app-icon-src/fix_and_bump.py
+# Dev scratch / icon tooling (icons live in src-tauri/icons)
+app-icon-src/
+
+# Duplicate helper scripts (canonical copy: src-tauri/resources/scrape/)
+scripts/
+
+# Mobile icon packs (Windows-only app)
+src-tauri/icons/android/
+src-tauri/icons/ios/
 
 # Misc
 *.pdb
+Start Grok Usage.bat
