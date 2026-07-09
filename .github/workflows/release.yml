@@ -1,0 +1,79 @@
+# Build Windows + macOS installers with GitHub Actions.
+# macOS builds run on real Apple runners (you do not need a Mac locally).
+#
+# Trigger:
+#   - Manual: GitHub → Actions → Release → Run workflow
+#   - Or tag: git tag v0.1.1 && git push origin v0.1.1
+#
+# Outputs: GitHub Release assets (.exe setup, .dmg / .app tarballs).
+# Unsigned macOS: right-click app → Open the first time (or xattr -cr).
+
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: ""
+            rust_targets: ""
+          - platform: macos-latest
+            args: "--target aarch64-apple-darwin"
+            rust_targets: aarch64-apple-darwin
+          - platform: macos-13
+            args: "--target x86_64-apple-darwin"
+            rust_targets: x86_64-apple-darwin
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build and upload release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # __VERSION__ is replaced from tauri.conf.json / package version
+          tagName: v__VERSION__
+          releaseName: "Grok Usage v__VERSION__"
+          releaseBody: |
+            ## Downloads
+            - **Windows x64**: `*-setup.exe`
+            - **macOS Apple Silicon**: `*aarch64*.dmg` (or app tarball)
+            - **macOS Intel**: `*x64*.dmg` (or app tarball)
+
+            ### macOS Gatekeeper (unsigned personal build)
+            First launch may be blocked. Right-click the app → **Open**, or:
+            ```bash
+            xattr -cr "/Applications/Grok Usage.app"
+            ```
+
+            Unofficial personal tool — not affiliated with xAI or Grok.
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}

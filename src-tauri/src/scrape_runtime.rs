@@ -9,7 +9,6 @@
 //!     node_modules/          (after first bootstrap)
 //!     .bootstrap-ok          (marker file)
 //!   node-runtime/            (optional portable Node if system Node missing)
-//!     node.exe, npm.cmd, ...
 //!
 //! Bootstrap (first live refresh, needs network once):
 //!   1. Copy bundled script + package.json into scrape-runtime
@@ -29,7 +28,7 @@ const BUNDLED_SCRIPT: &str = "fetch-usage.mjs";
 const BUNDLED_PKG: &str = "package.json";
 const MARKER: &str = ".bootstrap-ok";
 
-/// Portable Node version for Windows x64 (LTS line). Bump when needed.
+/// Portable Node version (LTS). Bump when needed.
 const PORTABLE_NODE_VERSION: &str = "v22.17.0";
 
 pub struct ScrapeRuntime {
@@ -153,24 +152,33 @@ async fn resolve_or_install_node(app: &AppHandle) -> Result<PathBuf, String> {
     }
 
     let portable_root = app_data_subdir(app, "node-runtime")?;
-    let portable_node = find_portable_node(&portable_root);
-    if let Some(p) = portable_node {
+    if let Some(p) = find_portable_node(&portable_root) {
         return Ok(p);
     }
 
-    // Download portable Node (one-time) so shared installs work without system Node.
     download_portable_node(&portable_root).await?;
     find_portable_node(&portable_root).ok_or_else(|| {
-        "Portable Node installed but node.exe not found. Check app data node-runtime folder."
-            .into()
+        format!(
+            "Portable Node installed but node binary not found under {}. Install Node.js LTS from https://nodejs.org and retry.",
+            portable_root.display()
+        )
     })
 }
 
 async fn find_node_on_path() -> Option<PathBuf> {
-    let mut cmd = Command::new("where");
-    cmd.arg("node")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+    #[cfg(windows)]
+    let mut cmd = {
+        let mut c = Command::new("where");
+        c.arg("node");
+        c
+    };
+    #[cfg(not(windows))]
+    let mut cmd = {
+        let mut c = Command::new("which");
+        c.arg("node");
+        c
+    };
+    cmd.stdout(Stdio::piped()).stderr(Stdio::null());
     crate::win_process::hide_tokio_console(&mut cmd);
     let output = cmd.output().await.ok()?;
     if !output.status.success() {
@@ -189,24 +197,64 @@ async fn find_node_on_path() -> Option<PathBuf> {
     }
 }
 
+fn node_binary_name() -> &'static str {
+    if cfg!(windows) {
+        "node.exe"
+    } else {
+        "node"
+    }
+}
+
 fn find_portable_node(root: &Path) -> Option<PathBuf> {
-    // node-v22.x.x-win-x64/node.exe or nested
+    let bin = node_binary_name();
     if let Ok(entries) = fs::read_dir(root) {
         for ent in entries.flatten() {
             let p = ent.path();
-            let candidate = if p.is_dir() {
-                p.join("node.exe")
-            } else {
+            if !p.is_dir() {
                 continue;
-            };
-            if candidate.exists() {
-                return Some(candidate);
+            }
+            // Windows: node-vX-win-x64/node.exe
+            // macOS/Linux: node-vX-darwin-arm64/bin/node
+            for c in [p.join(bin), p.join("bin").join(bin)] {
+                if c.exists() {
+                    return Some(c);
+                }
             }
         }
     }
-    let direct = root.join("node.exe");
+    let direct = root.join(bin);
     if direct.exists() {
         return Some(direct);
+    }
+    let nested = root.join("bin").join(bin);
+    if nested.exists() {
+        return Some(nested);
+    }
+    None
+}
+
+/// Returns (dist folder name, archive file name, is_zip).
+fn portable_node_artifact() -> Option<(String, String, bool)> {
+    let ver = PORTABLE_NODE_VERSION;
+    if cfg!(all(windows, target_arch = "x86_64")) {
+        let folder = format!("node-{ver}-win-x64");
+        return Some((folder.clone(), format!("{folder}.zip"), true));
+    }
+    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        let folder = format!("node-{ver}-darwin-arm64");
+        return Some((folder.clone(), format!("{folder}.tar.gz"), false));
+    }
+    if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+        let folder = format!("node-{ver}-darwin-x64");
+        return Some((folder.clone(), format!("{folder}.tar.gz"), false));
+    }
+    if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        let folder = format!("node-{ver}-linux-x64");
+        return Some((folder.clone(), format!("{folder}.tar.gz"), false));
+    }
+    if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+        let folder = format!("node-{ver}-linux-arm64");
+        return Some((folder.clone(), format!("{folder}.tar.gz"), false));
     }
     None
 }
@@ -215,32 +263,56 @@ async fn download_portable_node(root: &Path) -> Result<(), String> {
     fs::create_dir_all(root).map_err(|e| format!("node-runtime dir: {e}"))?;
 
     let ver = PORTABLE_NODE_VERSION;
-    let folder = format!("node-{ver}-win-x64");
-    let zip_name = format!("{folder}.zip");
-    let url = format!("https://nodejs.org/dist/{ver}/{zip_name}");
-    let zip_path = root.join(&zip_name);
+    let (folder, archive_name, is_zip) = portable_node_artifact().ok_or_else(|| {
+        "Automatic portable Node is not supported on this platform. Install Node.js LTS from https://nodejs.org".to_string()
+    })?;
+    let _ = folder;
+    let url = format!("https://nodejs.org/dist/{ver}/{archive_name}");
+    let archive_path = root.join(&archive_name);
 
-    // PowerShell download + expand (available on all modern Windows)
-    let ps = format!(
-        "$ProgressPreference='SilentlyContinue'; \
-         Invoke-WebRequest -Uri '{url}' -OutFile '{zip}'; \
-         Expand-Archive -Path '{zip}' -DestinationPath '{dest}' -Force",
-        url = url,
-        zip = zip_path.display(),
-        dest = root.display()
-    );
+    if cfg!(windows) {
+        let ps = format!(
+            "$ProgressPreference='SilentlyContinue'; \
+             Invoke-WebRequest -Uri '{url}' -OutFile '{zip}'; \
+             Expand-Archive -Path '{zip}' -DestinationPath '{dest}' -Force",
+            url = url,
+            zip = archive_path.display(),
+            dest = root.display()
+        );
+        let mut cmd = Command::new("powershell");
+        cmd.args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &ps])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        crate::win_process::hide_tokio_console(&mut cmd);
+        let output = cmd.output().await.map_err(|e| {
+            format!(
+                "Failed to download portable Node ({e}). Install Node.js LTS from https://nodejs.org and retry."
+            )
+        })?;
+        if !output.status.success() {
+            let err = String::from_utf8_lossy(&output.stderr);
+            return Err(format!(
+                "Could not download portable Node from nodejs.org.\n{err}\n\
+                 Workaround: install Node.js LTS from https://nodejs.org then retry."
+            ));
+        }
+        let _ = fs::remove_file(&archive_path);
+        let _ = is_zip;
+        return Ok(());
+    }
 
-    let mut cmd = Command::new("powershell");
-    cmd.args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &ps])
+    // macOS / Linux: curl + tar
+    let mut dl = Command::new("curl");
+    dl.args(["-fsSL", &url, "-o"])
+        .arg(&archive_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    crate::win_process::hide_tokio_console(&mut cmd);
-    let output = cmd.output().await.map_err(|e| {
+    crate::win_process::hide_tokio_console(&mut dl);
+    let output = dl.output().await.map_err(|e| {
         format!(
-            "Failed to download portable Node ({e}).              Install Node.js LTS from https://nodejs.org and retry."
+            "Failed to download portable Node with curl ({e}). Install Node.js LTS from https://nodejs.org and retry."
         )
     })?;
-
     if !output.status.success() {
         let err = String::from_utf8_lossy(&output.stderr);
         return Err(format!(
@@ -249,7 +321,23 @@ async fn download_portable_node(root: &Path) -> Result<(), String> {
         ));
     }
 
-    let _ = fs::remove_file(&zip_path);
+    let mut tar = Command::new("tar");
+    tar.args(["-xzf"])
+        .arg(&archive_path)
+        .arg("-C")
+        .arg(root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    crate::win_process::hide_tokio_console(&mut tar);
+    let extract = tar
+        .output()
+        .await
+        .map_err(|e| format!("Failed to extract portable Node archive: {e}"))?;
+    if !extract.status.success() {
+        let err = String::from_utf8_lossy(&extract.stderr);
+        return Err(format!("Could not extract portable Node.\n{err}"));
+    }
+    let _ = fs::remove_file(&archive_path);
     Ok(())
 }
 
@@ -266,7 +354,6 @@ async fn ensure_npm_deps(
 
     let npm = resolve_npm(node_path)?;
 
-    // npm install
     let mut install_cmd = Command::new(&npm);
     install_cmd
         .arg("install")
@@ -292,7 +379,6 @@ async fn ensure_npm_deps(
         ));
     }
 
-    // playwright install chromium (browsers go to default Playwright cache, often under user home)
     let npx = resolve_npx(node_path)?;
     let mut browsers_cmd = Command::new(&npx);
     browsers_cmd
@@ -315,7 +401,6 @@ async fn ensure_npm_deps(
         ));
     }
 
-    // Touch marker — also record where we put things for debugging
     let note = format!(
         "bootstrap ok\nnode={}\nruntime={}\nappdata={:?}\n",
         node_path.display(),
@@ -326,28 +411,53 @@ async fn ensure_npm_deps(
     Ok(())
 }
 
+fn path_from_which_output(output: &std::process::Output) -> Option<PathBuf> {
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let line = text.lines().next()?.trim();
+    if line.is_empty() {
+        return None;
+    }
+    let p = PathBuf::from(line);
+    p.exists().then_some(p)
+}
+
 fn resolve_npm(node_path: &Path) -> Result<PathBuf, String> {
-    // System npm.cmd on PATH
-    let mut where_npm = std::process::Command::new("where");
-    where_npm.arg("npm.cmd");
-    crate::win_process::hide_std_console(&mut where_npm);
-    if let Ok(output) = where_npm.output() {
-        if output.status.success() {
-            let text = String::from_utf8_lossy(&output.stdout);
-            if let Some(line) = text.lines().next() {
-                let p = PathBuf::from(line.trim());
-                if p.exists() {
-                    return Ok(p);
-                }
+    #[cfg(windows)]
+    {
+        let mut where_npm = std::process::Command::new("where");
+        where_npm.arg("npm.cmd");
+        crate::win_process::hide_std_console(&mut where_npm);
+        if let Ok(output) = where_npm.output() {
+            if let Some(p) = path_from_which_output(&output) {
+                return Ok(p);
+            }
+        }
+        if let Some(dir) = node_path.parent() {
+            let npm = dir.join("npm.cmd");
+            if npm.exists() {
+                return Ok(npm);
             }
         }
     }
 
-    // Portable Node ships npm.cmd next to node.exe
-    if let Some(dir) = node_path.parent() {
-        let npm = dir.join("npm.cmd");
-        if npm.exists() {
-            return Ok(npm);
+    #[cfg(not(windows))]
+    {
+        let mut which_npm = std::process::Command::new("which");
+        which_npm.arg("npm");
+        crate::win_process::hide_std_console(&mut which_npm);
+        if let Ok(output) = which_npm.output() {
+            if let Some(p) = path_from_which_output(&output) {
+                return Ok(p);
+            }
+        }
+        if let Some(dir) = node_path.parent() {
+            let npm = dir.join("npm");
+            if npm.exists() {
+                return Ok(npm);
+            }
         }
     }
 
@@ -358,25 +468,41 @@ fn resolve_npm(node_path: &Path) -> Result<PathBuf, String> {
 }
 
 fn resolve_npx(node_path: &Path) -> Result<PathBuf, String> {
-    let mut where_npx = std::process::Command::new("where");
-    where_npx.arg("npx.cmd");
-    crate::win_process::hide_std_console(&mut where_npx);
-    if let Ok(output) = where_npx.output() {
-        if output.status.success() {
-            let text = String::from_utf8_lossy(&output.stdout);
-            if let Some(line) = text.lines().next() {
-                let p = PathBuf::from(line.trim());
-                if p.exists() {
-                    return Ok(p);
-                }
+    #[cfg(windows)]
+    {
+        let mut where_npx = std::process::Command::new("where");
+        where_npx.arg("npx.cmd");
+        crate::win_process::hide_std_console(&mut where_npx);
+        if let Ok(output) = where_npx.output() {
+            if let Some(p) = path_from_which_output(&output) {
+                return Ok(p);
+            }
+        }
+        if let Some(dir) = node_path.parent() {
+            let npx = dir.join("npx.cmd");
+            if npx.exists() {
+                return Ok(npx);
             }
         }
     }
-    if let Some(dir) = node_path.parent() {
-        let npx = dir.join("npx.cmd");
-        if npx.exists() {
-            return Ok(npx);
+
+    #[cfg(not(windows))]
+    {
+        let mut which_npx = std::process::Command::new("which");
+        which_npx.arg("npx");
+        crate::win_process::hide_std_console(&mut which_npx);
+        if let Ok(output) = which_npx.output() {
+            if let Some(p) = path_from_which_output(&output) {
+                return Ok(p);
+            }
+        }
+        if let Some(dir) = node_path.parent() {
+            let npx = dir.join("npx");
+            if npx.exists() {
+                return Ok(npx);
+            }
         }
     }
+
     Err("npx not found (comes with Node.js)".into())
 }

@@ -74,7 +74,7 @@
         <div class="hero-copy">
           <p class="pill-tag">
             <span class="pill-dot"></span>
-            Windows now · macOS soon · Free · Personal use
+            Windows · macOS (CI) · Free · Personal use
           </p>
           <h1>
             Your SuperGrok limit,<br />
@@ -92,12 +92,12 @@
               </svg>
               Windows
             </a>
-            <a class="btn ghost platform-soon" href="#macos" aria-disabled="true" title="macOS build coming soon">
+            <a class="btn ghost" href="https://github.com/L0nE-F0x/GrokUsageWidget/releases/latest" target="_blank" rel="noopener" title="Download macOS build from GitHub Releases">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                 <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/>
               </svg>
               macOS
-              <span class="soon-badge">Soon</span>
+              <span class="soon-badge">Releases</span>
             </a>
             <a class="btn ghost" href="#install">How to install</a>
           </div>
@@ -248,7 +248,7 @@
                   <strong>Windows:</strong>
                   <a href="/downloads/Grok-Usage-Setup.exe" download>Grok-Usage-Setup.exe</a>
                   (~2&nbsp;MB).
-                  <strong>macOS:</strong> coming soon.
+                  <strong>macOS:</strong> <a href="https://github.com/L0nE-F0x/GrokUsageWidget/releases/latest" target="_blank" rel="noopener">GitHub Releases</a>.
                 </p>
               </div>
             </li>
@@ -291,17 +291,16 @@
                 </svg>
                 Download for Windows
               </a>
-              <a class="btn ghost block platform-soon" href="#macos" id="macos" aria-disabled="true" title="macOS build coming soon — needs a signed .dmg built on a Mac">
+              <a class="btn ghost block" href="https://github.com/L0nE-F0x/GrokUsageWidget/releases/latest" id="macos" target="_blank" rel="noopener" title="Download macOS build from GitHub Releases">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                   <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/>
                 </svg>
                 macOS
-                <span class="soon-badge">Coming soon</span>
+                <span class="soon-badge">GitHub Releases</span>
               </a>
             </div>
             <p class="download-note">
-              Windows x64 installer ready now. macOS (.dmg) needs a Mac build —
-              not available yet. Unofficial · not affiliated with xAI or Grok.
+              Windows installer on this site. macOS builds ship via GitHub Actions Releases (Apple Silicon + Intel). Unsigned: right-click → Open the first time. Unofficial · not affiliated with xAI or Grok.
             </p>
           </aside>
         </div>
@@ -337,14 +336,5 @@
         </p>
       </div>
     </footer>
-  
-    <script>
-      document.querySelectorAll('.platform-soon').forEach((el) => {
-        el.addEventListener('click', (e) => {
-          e.preventDefault();
-          alert('macOS build is coming soon.\n\nApple requires the .dmg/.app to be built on a Mac (or CI). Windows download is ready now.');
-        });
-      });
-    </script>
 \n  </body>
 </html>
