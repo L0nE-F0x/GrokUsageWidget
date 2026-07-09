@@ -33,13 +33,19 @@ body {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: transparent;
+  /* Transparent host window — rounded corners clip cleanly (no white squares). */
+  background: transparent !important;
   font-family: var(--font);
   color: var(--text);
   font-size: 13px;
   line-height: 1.45;
   user-select: none;
   -webkit-user-select: none;
+}
+
+/* WebView2 default paint can flash white without an explicit transparent root. */
+#app {
+  background: transparent;
 }
 
 .widget {
@@ -49,8 +55,13 @@ body {
   background: linear-gradient(165deg, #121216 0%, var(--bg) 50%, #0a0a0c 100%);
   border: 1px solid var(--border);
   border-radius: var(--radius);
+  /* CSS shadow only — native Windows shadow draws a white frame on undecorated windows. */
   box-shadow: var(--shadow);
   overflow: hidden;
+  /* Force GPU compositing so border-radius clips the gradient reliably on WebView2. */
+  transform: translateZ(0);
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
 }
 
 /* Title bar */
@@ -617,6 +628,8 @@ body {
   border-radius: 999px;
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
   background: linear-gradient(165deg, #16161c 0%, var(--bg) 60%, #0a0a0c 100%);
+  /* Fully opaque fill so transparent window corners never bleed white through the pill. */
+  background-clip: padding-box;
 }
 
 .widget.compact .titlebar,

@@ -209,6 +209,9 @@ pub fn run() {
                 if let Some(icon) = app.default_window_icon() {
                     let _ = window.set_icon(icon.clone());
                 }
+                // Match transparent:true — avoid WebView2 painting opaque white in the
+                // corners outside CSS border-radius (pill + full modes).
+                let _ = window.set_background_color(Some(tauri::window::Color(0, 0, 0, 0)));
                 restore_window_state(&window, &s);
             }
 
