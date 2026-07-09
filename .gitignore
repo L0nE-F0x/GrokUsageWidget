@@ -1,8 +1,20 @@
-# Dependencies / build outputs (never commit)
+# --- Rebuildable (never commit; safe to delete anytime) ---
 node_modules/
 dist/
 src-tauri/target/
 **/target/
+
+# Local installers / portable copies
+*.exe
+!website/downloads/*.exe
+portable/
+Grok Usage Setup.exe
+Start Grok Usage.bat
+
+# Dev scratch
+app-icon-src/
+scripts/
+website/*.py
 
 # OS / editor
 .DS_Store
@@ -10,31 +22,14 @@ Thumbs.db
 .vscode/
 .idea/
 *.log
+*.pdb
 
-# Env / secrets
+# Env / secrets / runtime
 .env
 .env.*
-
-# Runtime / user data
 playwright-profile/
 **/playwright-profile/
 
-# Local installers & portable copies (site serves website/downloads/)
-Grok Usage Setup.exe
-portable/
-*.exe
-!website/downloads/*.exe
-
-# Dev scratch / icon tooling (icons live in src-tauri/icons)
-app-icon-src/
-
-# Duplicate helper scripts (canonical copy: src-tauri/resources/scrape/)
-scripts/
-
-# Mobile icon packs (Windows-only app)
+# Mobile icon packs if regenerated
 src-tauri/icons/android/
 src-tauri/icons/ios/
-
-# Misc
-*.pdb
-Start Grok Usage.bat
