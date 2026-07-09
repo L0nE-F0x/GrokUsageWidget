@@ -832,3 +832,47 @@ main {
     transition: none;
   }
 }
+
+/* Platform download buttons */
+.platform-ctas .btn {
+  min-width: 8.5rem;
+}
+
+.platform-stack {
+  display: grid;
+  gap: 0.65rem;
+  margin-bottom: 0.25rem;
+}
+
+.platform-soon {
+  position: relative;
+  opacity: 0.72;
+  cursor: not-allowed;
+  pointer-events: auto;
+}
+
+.platform-soon:hover {
+  transform: none;
+  background: rgba(255, 255, 255, 0.03);
+  border-color: var(--border-strong);
+  text-decoration: none;
+}
+
+.soon-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.35rem;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent-bright);
+  background: var(--accent-soft);
+  border: 1px solid rgba(212, 160, 23, 0.25);
+}
+
+.btn.block.platform-soon {
+  justify-content: center;
+}
