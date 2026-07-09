@@ -1,16 +1,17 @@
-# Netlify: deploy ONLY the static marketing / download site.
-# Do NOT build the Tauri app or install root package.json deps.
+# Authoritative Netlify config (overrides confusing UI fields).
+# Deploys ONLY the static download site — never installs root package.json / Playwright.
 
 [build]
-  # All site files live here (no package.json → no npm install)
+  # Run the "build" from the website folder (no package.json here → no npm install)
   base = "website"
+  # Publish the website folder itself (relative to base)
   publish = "."
-  # Explicit no-op so Netlify never tries npm run build from the monorepo root
-  command = "echo Static website — no build step"
+  command = "echo Static website - no build"
 
 [build.environment]
-  # Skip any automatic dependency install heuristics
   NODE_VERSION = "20"
+  # Extra safety: never run npm/yarn/pnpm install for this site
+  NETLIFY_SKIP_NPM = "true"
 
 [[headers]]
   for = "/downloads/*"
