@@ -7,13 +7,17 @@ mod settings;
 mod win_process;
 
 use models::{AppSettings, UsageResponse};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, Size, State, WebviewWindow,
-    WindowEvent,
+    AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, Position, Size, State,
+    WebviewWindow, WindowEvent,
 };
+
+/// Tracks compact mode for Resized handlers (disk settings can lag a set_size).
+static COMPACT_MODE_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Shared handles for tray updates from commands / frontend.
 pub struct AppState {
@@ -114,6 +118,7 @@ fn set_compact_mode(app: AppHandle, enabled: bool) -> Result<AppSettings, String
 // -- Helpers ----------------------------------------------------------------
 
 fn apply_window_mode(window: &WebviewWindow, compact: bool) -> Result<(), String> {
+    COMPACT_MODE_ACTIVE.store(compact, Ordering::Relaxed);
     if compact {
         window
             .set_min_size(Some(Size::Logical(LogicalSize {
@@ -145,6 +150,9 @@ fn apply_window_mode(window: &WebviewWindow, compact: bool) -> Result<(), String
     }
     // Clip native window shape so square host corners never stick past the pill/card.
     apply_rounded_region(window, compact);
+    // Expanding from a bottom-edge pill (or restoring full size at a pill position)
+    // can push most of the window off-screen while Win32 still reports it "visible".
+    ensure_window_on_screen(window);
     Ok(())
 }
 
@@ -182,13 +190,18 @@ fn apply_rounded_region(window: &WebviewWindow, compact: bool) {
     }
 
     // CreateRoundRectRgn ellipse width/height = corner diameter.
+    // Clamp so extreme ellipses never collapse the region to empty.
     let (ellipse_w, ellipse_h) = if compact {
         // True pill: radius = half the bar height.
-        (h, h)
+        let d = h.min(w).max(2);
+        (d, d)
     } else {
         let scale = window.scale_factor().unwrap_or(1.0);
         // Match CSS --radius: 12px (logical → physical).
-        let diameter = ((12.0 * scale).round() as i32 * 2).max(2);
+        let diameter = ((12.0 * scale).round() as i32 * 2)
+            .max(2)
+            .min(w)
+            .min(h);
         (diameter, diameter)
     };
 
@@ -204,8 +217,115 @@ fn apply_rounded_region(window: &WebviewWindow, compact: bool) {
 #[cfg(not(windows))]
 fn apply_rounded_region(_window: &WebviewWindow, _compact: bool) {}
 
+/// True when a usable chunk of the window intersects some monitor.
+fn is_window_on_screen(window: &WebviewWindow) -> bool {
+    let Ok(pos) = window.outer_position() else {
+        return true;
+    };
+    let Ok(size) = window.outer_size() else {
+        return true;
+    };
+    let w = size.width as i32;
+    let h = size.height as i32;
+    if w <= 0 || h <= 0 {
+        return false;
+    }
+
+    let Ok(monitors) = window.available_monitors() else {
+        return true;
+    };
+    if monitors.is_empty() {
+        return true;
+    }
+
+    // Require enough intersection to interact with (title bar / pill).
+    let min_w = 80.min(w);
+    let min_h = 40.min(h);
+
+    monitors.iter().any(|m| {
+        let mp = m.position();
+        let ms = m.size();
+        let mx1 = mp.x;
+        let my1 = mp.y;
+        let mx2 = mp.x + ms.width as i32;
+        let my2 = mp.y + ms.height as i32;
+
+        let ix1 = pos.x.max(mx1);
+        let iy1 = pos.y.max(my1);
+        let ix2 = (pos.x + w).min(mx2);
+        let iy2 = (pos.y + h).min(my2);
+        (ix2 - ix1) >= min_w && (iy2 - iy1) >= min_h
+    })
+}
+
+/// If the window is mostly off-screen, clamp it into the nearest/primary work area.
+fn ensure_window_on_screen(window: &WebviewWindow) {
+    if is_window_on_screen(window) {
+        return;
+    }
+
+    let Ok(pos) = window.outer_position() else {
+        return;
+    };
+    let Ok(size) = window.outer_size() else {
+        return;
+    };
+    let w = size.width as i32;
+    let h = size.height as i32;
+    if w <= 0 || h <= 0 {
+        return;
+    }
+
+    let monitors = match window.available_monitors() {
+        Ok(m) if !m.is_empty() => m,
+        _ => return,
+    };
+
+    // Prefer the monitor whose center is closest to the window's center.
+    let cx = pos.x + w / 2;
+    let cy = pos.y + h / 2;
+    let mut best = 0usize;
+    let mut best_dist = i64::MAX;
+    for (i, m) in monitors.iter().enumerate() {
+        let mp = m.position();
+        let ms = m.size();
+        let mcx = mp.x as i64 + ms.width as i64 / 2;
+        let mcy = mp.y as i64 + ms.height as i64 / 2;
+        let dist = (mcx - cx as i64).pow(2) + (mcy - cy as i64).pow(2);
+        if dist < best_dist {
+            best_dist = dist;
+            best = i;
+        }
+    }
+
+    let m = &monitors[best];
+    let mp = m.position();
+    let ms = m.size();
+    let margin = 16;
+    let max_x = mp.x + (ms.width as i32 - w).max(0);
+    let max_y = mp.y + (ms.height as i32 - h).max(0);
+    let x = pos.x.clamp(mp.x + margin, max_x.saturating_sub(margin).max(mp.x));
+    let y = pos.y.clamp(mp.y + margin, max_y.saturating_sub(margin).max(mp.y));
+
+    // If the window is taller/wider than the monitor, pin to top-left with margin.
+    let x = if w + margin * 2 >= ms.width as i32 {
+        mp.x + margin
+    } else {
+        x
+    };
+    let y = if h + margin * 2 >= ms.height as i32 {
+        mp.y + margin
+    } else {
+        y
+    };
+
+    let _ = window.set_position(Position::Physical(PhysicalPosition { x, y }));
+}
+
 fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        ensure_window_on_screen(&window);
         let _ = window.show();
         let _ = window.set_focus();
     }
@@ -213,11 +333,12 @@ fn show_main_window(app: &AppHandle) {
 
 fn toggle_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
-        if window.is_visible().unwrap_or(false) {
+        let visible = window.is_visible().unwrap_or(false);
+        // Off-screen-but-"visible" windows must show+clamp, not hide.
+        if visible && is_window_on_screen(&window) {
             let _ = window.hide();
         } else {
-            let _ = window.show();
-            let _ = window.set_focus();
+            show_main_window(app);
         }
     }
 }
@@ -225,10 +346,11 @@ fn toggle_main_window(app: &AppHandle) {
 fn restore_window_state(window: &WebviewWindow, s: &AppSettings) {
     let _ = window.set_always_on_top(s.always_on_top);
     if let (Some(x), Some(y)) = (s.window_x, s.window_y) {
-        let _ = window.set_position(tauri::Position::Physical(PhysicalPosition { x, y }));
+        let _ = window.set_position(Position::Physical(PhysicalPosition { x, y }));
     }
     // Compact mode is applied by the frontend after live data loads
     // so we don't open a tiny empty pill on cold start.
+    // apply_window_mode also clamps onto a visible monitor.
     let _ = apply_window_mode(window, false);
 }
 
@@ -334,9 +456,10 @@ pub fn run() {
                 }
                 WindowEvent::Resized(_) => {
                     // Keep the clip region in sync when the user resizes full mode.
-                    let app = window.app_handle();
-                    let compact = settings::load_settings(app).compact_mode;
-                    if let Some(w) = app.get_webview_window("main") {
+                    // Use in-memory flag — disk settings can still hold the old mode
+                    // while set_size is in flight during compact toggles.
+                    let compact = COMPACT_MODE_ACTIVE.load(Ordering::Relaxed);
+                    if let Some(w) = window.app_handle().get_webview_window("main") {
                         apply_rounded_region(&w, compact);
                     }
                 }

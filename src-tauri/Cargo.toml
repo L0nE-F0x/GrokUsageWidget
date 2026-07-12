@@ -1,6 +1,6 @@
 [package]
 name = "grok-usage-widget"
-version = "0.1.4"
+version = "0.1.5"
 description = "Personal Windows widget for Grok Weekly SuperGrok usage"
 authors = ["you"]
 edition = "2021"
