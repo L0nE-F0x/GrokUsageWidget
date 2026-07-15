@@ -72,40 +72,76 @@ const KNOWN_CATEGORIES = [
 
 /**
  * Rich text parse: overall %, categories, reset, credits.
+ * Returns { ..., overallFound } so 0% is distinguishable from "not found".
  */
 function parseUsageText(text) {
+  // Collapse all whitespace (including newlines) so "0%\nused" matches "% used"
   const cleaned = text
     .replace(/\u00a0/g, " ")
-    .replace(/[ \t]+/g, " ")
-    .replace(/\r/g, "");
+    .replace(/[ \t\r\f\v]+/g, " ")
+    .replace(/\n+/g, "\n")
+    .trim();
+  // Flat string for patterns that span lines (Grok UI often splits "0%" / "used")
+  const flat = cleaned.replace(/\n+/g, " ").replace(/ {2,}/g, " ");
   const lines = cleaned
     .split("\n")
     .map((l) => l.trim())
     .filter(Boolean);
 
   let overallPercent = null;
+  let overallFound = false;
 
-  // Prefer explicit "used" phrasing
+  // Prefer explicit "used" phrasing (0% is valid - weekly pool unused)
   const overallPatterns = [
     /(\d{1,3}(?:\.\d+)?)\s*%\s*used/i,
     /used\s*[:\-]?\s*(\d{1,3}(?:\.\d+)?)\s*%/i,
-    /weekly\s+(?:supergrok\s+)?(?:limit|usage|pool)?[^\d%]{0,60}(\d{1,3}(?:\.\d+)?)\s*%/i,
+    /weekly\s+(?:supergrok\s+)?(?:limit|usage|pool)?[^\d%]{0,80}(\d{1,3}(?:\.\d+)?)\s*%/i,
     /supergrok[^\d%]{0,40}(\d{1,3}(?:\.\d+)?)\s*%/i,
     /(\d{1,3}(?:\.\d+)?)\s*%\s*(?:of\s+)?(?:your\s+)?(?:weekly|limit|pool)/i,
     /(?:usage|limit)\s*[:\-]?\s*(\d{1,3}(?:\.\d+)?)\s*%/i,
   ];
   for (const re of overallPatterns) {
-    const m = cleaned.match(re);
+    const m = flat.match(re) || cleaned.match(re);
     if (m) {
       overallPercent = clampPct(parseFloat(m[1]));
+      overallFound = true;
       break;
     }
   }
 
-  // Standalone large % near top of usage section (first strong % in text)
-  if (overallPercent == null) {
-    const firstPct = cleaned.match(/(?:weekly|usage|limit|supergrok)[\s\S]{0,120}?(\d{1,3}(?:\.\d+)?)\s*%/i);
-    if (firstPct) overallPercent = clampPct(parseFloat(firstPct[1]));
+  // Standalone large % near usage section (first strong % in text)
+  if (!overallFound) {
+    const firstPct = flat.match(
+      /(?:weekly|usage|limit|supergrok)[\s\S]{0,120}?(\d{1,3}(?:\.\d+)?)\s*%/i
+    );
+    if (firstPct) {
+      overallPercent = clampPct(parseFloat(firstPct[1]));
+      overallFound = true;
+    }
+  }
+
+  // Multi-line: "Weekly SuperGrok Limit" then a line that is just "NN%"
+  if (!overallFound) {
+    for (let i = 0; i < lines.length; i++) {
+      if (/weekly\s+supergrok|supergrok\s+limit|weekly\s+limit/i.test(lines[i])) {
+        for (let j = i + 1; j < Math.min(i + 6, lines.length); j++) {
+          const pm = lines[j].match(/^(\d{1,3}(?:\.\d+)?)\s*%$/);
+          if (pm) {
+            overallPercent = clampPct(parseFloat(pm[1]));
+            overallFound = true;
+            break;
+          }
+          // "0% used" on one line
+          const um = lines[j].match(/^(\d{1,3}(?:\.\d+)?)\s*%\s*used$/i);
+          if (um) {
+            overallPercent = clampPct(parseFloat(um[1]));
+            overallFound = true;
+            break;
+          }
+        }
+        break;
+      }
+    }
   }
 
   const categories = [];
@@ -226,7 +262,7 @@ function parseUsageText(text) {
     /next\s+reset[:\s]+([^\n]{5,60})/i,
   ];
   for (const re of resetPatterns) {
-    const m = cleaned.match(re);
+    const m = flat.match(re) || cleaned.match(re);
     if (m) {
       resetsDate = (m[1] || "").trim();
       resetsTime = (m[2] || "").trim();
@@ -245,7 +281,7 @@ function parseUsageText(text) {
     /credits?\s+(?:balance|remaining)?\s*[:\-]?\s*\$?\s*([\d,]+(?:\.\d+)?)/i,
   ];
   for (const re of creditPatterns) {
-    const m = cleaned.match(re);
+    const m = flat.match(re) || cleaned.match(re);
     if (m) {
       extraCredits = parseFloat(m[1].replace(/,/g, ""));
       extraCreditsLabel = m[0].trim();
@@ -253,19 +289,26 @@ function parseUsageText(text) {
     }
   }
 
-  if (
-    (overallPercent == null || overallPercent === 0) &&
-    categories.length
-  ) {
-    // Don't invent overall from average of categories — use max as rough signal only if no overall
+  if (!overallFound && categories.length) {
+    // Don't invent overall from average of categories - use max as rough signal only if no overall
     const max = Math.max(...categories.map((c) => c.percent));
     // Prefer sum if they look like parts of a whole (~100)
     const sum = categories.reduce((s, c) => s + c.percent, 0);
     overallPercent = clampPct(sum <= 100.5 ? sum : max);
+    overallFound = true;
   }
+
+  // Reset date alone is strong evidence we opened the usage panel
+  const usageSection =
+    overallFound ||
+    categories.length > 0 ||
+    /weekly\s+supergrok\s+limit/i.test(flat) ||
+    Boolean(resetsDisplay);
 
   return {
     overallPercent: overallPercent ?? 0,
+    overallFound,
+    usageSection,
     categories,
     resetsDate,
     resetsTime,
@@ -275,6 +318,23 @@ function parseUsageText(text) {
   };
 }
 
+/** True when we successfully read usage (including legitimate 0%). */
+function hasUsageData(parsed) {
+  if (!parsed) return false;
+  if (parsed.overallFound) return true;
+  if (parsed.categories && parsed.categories.length > 0) return true;
+  // Usage panel open with reset line even if % missed (still show something)
+  if (parsed.usageSection && parsed.resetsDisplay) return true;
+  // Back-compat: numeric overall was set without flag (network JSON path)
+  if (
+    typeof parsed.overallPercent === "number" &&
+    !Number.isNaN(parsed.overallPercent) &&
+    parsed.overallPercent > 0
+  ) {
+    return true;
+  }
+  return false;
+}
 async function deepScrape(page) {
   return page.evaluate(() => {
     const bodyText = document.body?.innerText || "";
@@ -367,15 +427,16 @@ function enrichFromDom(parsed, dom) {
       }
       if (
         !matchedCat &&
-        (!parsed.overallPercent || parsed.overallPercent === 0) &&
+        !parsed.overallFound &&
         /weekly|overall|super|limit|usage|pool/i.test(ctx)
       ) {
         parsed.overallPercent = clampPct(n);
+        parsed.overallFound = true;
       }
     }
 
-    // If still no overall, first bar with a valid %
-    if (!parsed.overallPercent || parsed.overallPercent === 0) {
+    // If still no overall, first bar with a valid % (including 0)
+    if (!parsed.overallFound) {
       for (const b of dom.bars) {
         let n = parseFloat(String(b.ariaNow ?? "").replace(/[^\d.]/g, ""));
         if (Number.isNaN(n)) {
@@ -385,18 +446,20 @@ function enrichFromDom(parsed, dom) {
         }
         if (!Number.isNaN(n) && n >= 0 && n <= 100) {
           parsed.overallPercent = clampPct(n);
+          parsed.overallFound = true;
           break;
         }
       }
     }
   }
 
-  // pctNodes with category parents
+  // pctNodes: "NN%" leaves — match categories or overall "used"
   if (dom.pctNodes?.length) {
     for (const p of dom.pctNodes) {
       const n = parseFloat(p.text);
       if (Number.isNaN(n)) continue;
       const ctx = `${p.parent}\n${p.grand}`;
+      let matchedCat = false;
       for (const name of KNOWN_CATEGORIES) {
         if (new RegExp(name.replace(/ /g, "\\s+"), "i").test(ctx)) {
           const display = name === "Build" ? "Grok Build" : name;
@@ -411,9 +474,23 @@ function enrichFromDom(parsed, dom) {
               unit: null,
             });
           }
+          matchedCat = true;
+          break;
         }
       }
+      if (
+        !matchedCat &&
+        !parsed.overallFound &&
+        /used|weekly|supergrok|limit|usage|pool/i.test(ctx)
+      ) {
+        parsed.overallPercent = clampPct(n);
+        parsed.overallFound = true;
+      }
     }
+  }
+
+  if (parsed.overallFound || parsed.categories.length > 0) {
+    parsed.usageSection = true;
   }
 
   return parsed;
@@ -844,16 +921,18 @@ async function main() {
 
     // Prefer network JSON if we snagged something useful
     let parsed = tryParseNetworkJson(networkBodies);
-    if (!parsed) {
+    if (parsed) {
+      // Network path: treat any numeric overall (incl. 0) as found when present
+      if (typeof parsed.overallPercent === "number") {
+        parsed.overallFound = true;
+      }
+      parsed.usageSection = hasUsageData(parsed);
+    } else {
       parsed = parseUsageText(dom.bodyText);
       parsed = enrichFromDom(parsed, dom);
     }
 
-    const hasData =
-      (parsed.overallPercent && parsed.overallPercent > 0) ||
-      parsed.categories.length > 0;
-
-    if (!hasData) {
+    if (!hasUsageData(parsed)) {
       // One more attempt: scroll and wait
       try {
         await page.mouse.wheel(0, 800);
@@ -866,11 +945,7 @@ async function main() {
       }
     }
 
-    const ok =
-      (parsed.overallPercent && parsed.overallPercent > 0) ||
-      parsed.categories.length > 0;
-
-    if (!ok) {
+    if (!hasUsageData(parsed)) {
       const path = writeDebug(debugDir, dom, "parse_failed");
       try {
         await page.screenshot({
@@ -891,7 +966,12 @@ async function main() {
     }
 
     const snapshot = {
-      overallPercent: parsed.overallPercent || 0,
+      // Keep 0 - do not coerce with || (0 is a valid weekly usage reading)
+      overallPercent:
+        typeof parsed.overallPercent === "number" &&
+        !Number.isNaN(parsed.overallPercent)
+          ? parsed.overallPercent
+          : 0,
       categories: parsed.categories,
       resetsDate: parsed.resetsDate || "",
       resetsTime: parsed.resetsTime || "",
