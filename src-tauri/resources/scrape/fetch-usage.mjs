@@ -61,84 +61,133 @@ function parseMoney(raw) {
   return Number.isNaN(n) ? null : n;
 }
 
+/** Currency amount capture (US$1.76, $1.76, USD 1.76, fullwidth ＄). */
+const MONEY_RE =
+  /(?:US\s*[\$＄]|USD\s*|U\.?S\.?\s*[\$＄]|[\$＄])\s*([\d,]+(?:\.\d+)?)/i;
+const MONEY_RE_TRAILING =
+  /([\d,]+(?:\.\d+)?)\s*(?:USD|US\s*[\$＄]|[\$＄])/i;
+
+/**
+ * True when a % figure is a sale/promo badge (e.g. "Up to 40% Off"), not usage.
+ */
+function isPromoPercentContext(text) {
+  const t = String(text || "");
+  return (
+    /\d{1,3}(?:\.\d+)?\s*%\s*off\b/i.test(t) ||
+    /\bup\s+to\s+\d{1,3}(?:\.\d+)?\s*%/i.test(t) ||
+    /\b(?:save|discount|sale|promo|deal)\b[^.\n]{0,20}\d{1,3}(?:\.\d+)?\s*%/i.test(
+      t
+    ) ||
+    /\d{1,3}(?:\.\d+)?\s*%[^.\n]{0,20}\b(?:off|discount|save|sale)\b/i.test(t)
+  );
+}
+
+/**
+ * Strip promotional "N% Off" / "Up to N%" badges so they cannot be read as usage.
+ */
+function stripPromoPercents(text) {
+  return String(text || "")
+    .replace(/\bup\s+to\s+\d{1,3}(?:\.\d+)?\s*%\s*off\b/gi, " ")
+    .replace(/\bup\s+to\s+\d{1,3}(?:\.\d+)?\s*%/gi, " ")
+    .replace(/\d{1,3}(?:\.\d+)?\s*%\s*off\b/gi, " ")
+    .replace(/\bsave\s+\d{1,3}(?:\.\d+)?\s*%/gi, " ");
+}
+
 /**
  * Extract Extra Usage Credits balance from page text.
- * Grok layouts vary:
- *  - "Extra Usage Credits Balance Buy More US$0.00"
- *  - "Extra Usage Credits" then "Additional Credits" / "Buy Credits" (no $ when $0)
- *  - "$15 in extra usage credits"
+ * Current Grok layout (2026):
+ *   Extra Usage Credits
+ *   US$1.76
+ *   Additional Credits
+ *   Buy Credits   [Up to 40% Off]
  */
 function parseExtraCredits(flat, cleaned, lines) {
   let extraCredits = null;
   let extraCreditsLabel = null;
 
+  const trySet = (raw) => {
+    const val = parseMoney(raw);
+    if (val != null && val >= 0 && val < 1_000_000) {
+      extraCredits = val;
+      extraCreditsLabel = `$${val.toFixed(2)}`;
+      return true;
+    }
+    return false;
+  };
+
   const creditPatterns = [
-    // Section heading then optional words then US$ / $ amount
-    /extra\s+usage\s+credits?[\s\S]{0,120}?(?:US\s*\$|\$)\s*([\d,]+(?:\.\d+)?)/i,
-    /(?:US\s*\$|\$)\s*([\d,]+(?:\.\d+)?)\s*(?:in\s+)?extra\s+(?:usage\s+)?credits?/i,
+    // Amount sitting above "Additional Credits" (current grok.com layout)
+    new RegExp(
+      MONEY_RE.source + "\\s*additional\\s+credits?",
+      "i"
+    ),
+    // Section heading then amount (wide window — tooltips can sit between)
+    /extra\s+usage\s+credits?[\s\S]{0,400}?(?:US\s*[\$＄]|USD\s*|U\.?S\.?\s*[\$＄]|[\$＄])\s*([\d,]+(?:\.\d+)?)/i,
+    /(?:US\s*[\$＄]|[\$＄])\s*([\d,]+(?:\.\d+)?)\s*(?:in\s+)?extra\s+(?:usage\s+)?credits?/i,
     // Balance line near credits
-    /(?:credit\s+)?balance\s*[:\-]?\s*(?:US\s*\$|\$)\s*([\d,]+(?:\.\d+)?)/i,
-    /(?:US\s*\$|\$)\s*([\d,]+(?:\.\d+)?)\s*(?:credit\s+)?balance/i,
-    // Additional credits / prepaid
-    /additional\s+credits?\s*[:\-]?\s*(?:US\s*\$|\$)\s*([\d,]+(?:\.\d+)?)/i,
-    /credits?\s+(?:balance|remaining|available)?\s*[:\-]?\s*(?:US\s*\$|\$)\s*([\d,]+(?:\.\d+)?)/i,
-    // Bare amount after heading (less specific — last resort among patterns)
-    /extra\s+usage\s+credits?\s*[:\-]?\s*([\d,]+(?:\.\d+)?)\b/i,
+    /(?:credit\s+)?balance\s*[:\-]?\s*(?:US\s*[\$＄]|USD\s*|[\$＄])\s*([\d,]+(?:\.\d+)?)/i,
+    /(?:US\s*[\$＄]|[\$＄])\s*([\d,]+(?:\.\d+)?)\s*(?:credit\s+)?balance/i,
+    // Additional credits label then amount
+    /additional\s+credits?\s*[:\-]?\s*(?:US\s*[\$＄]|USD\s*|[\$＄])\s*([\d,]+(?:\.\d+)?)/i,
+    /credits?\s+(?:balance|remaining|available)?\s*[:\-]?\s*(?:US\s*[\$＄]|USD\s*|[\$＄])\s*([\d,]+(?:\.\d+)?)/i,
   ];
 
   for (const re of creditPatterns) {
     const m = flat.match(re) || cleaned.match(re);
-    if (m) {
-      const val = parseMoney(m[1]);
-      if (val != null && val >= 0 && val < 1_000_000) {
-        extraCredits = val;
-        extraCreditsLabel = `$${val.toFixed(2)}`;
-        break;
-      }
-    }
+    if (m && trySet(m[1])) break;
   }
 
-  // Multi-line: "Extra Usage Credits" then a nearby money line or plain number
+  // Multi-line: scan the Extra Usage Credits block for any money token
   if (extraCredits == null && Array.isArray(lines)) {
     for (let i = 0; i < lines.length; i++) {
       if (!/extra\s+usage\s+credits?/i.test(lines[i])) continue;
-      for (let j = i; j < Math.min(i + 10, lines.length); j++) {
-        const money = lines[j].match(/(?:US\s*\$|\$)\s*([\d,]+(?:\.\d+)?)/i);
-        if (money) {
-          const val = parseMoney(money[1]);
-          if (val != null && val >= 0 && val < 1_000_000) {
-            extraCredits = val;
-            extraCreditsLabel = `$${val.toFixed(2)}`;
-            break;
-          }
+      // Walk forward through the credits card
+      for (let j = i; j < Math.min(i + 14, lines.length); j++) {
+        // Stop if we clearly left the credits card
+        if (j > i && /^(auto\s+top-?up|weekly\s+supergrok|data\s+controls)/i.test(lines[j])) {
+          break;
         }
-        // Plain "0.00" / "15.00" on its own line under the section
-        const plain = lines[j].match(/^([\d,]+(?:\.\d{1,2})?)\s*(?:USD|US\$)?$/i);
-        if (plain && j > i) {
-          const val = parseMoney(plain[1]);
-          if (val != null && val >= 0 && val < 1_000_000) {
-            extraCredits = val;
-            extraCreditsLabel = `$${val.toFixed(2)}`;
-            break;
-          }
+        let mm = lines[j].match(MONEY_RE) || lines[j].match(MONEY_RE_TRAILING);
+        if (mm && trySet(mm[1])) break;
+        // Plain "1.76" immediately before "Additional Credits"
+        if (
+          j + 1 < lines.length &&
+          /additional\s+credits?/i.test(lines[j + 1])
+        ) {
+          const plain = lines[j].match(/^([\d,]+(?:\.\d{1,2})?)$/);
+          if (plain && trySet(plain[1])) break;
         }
       }
-      // Section is present but no amount rendered (common when balance is $0)
-      if (extraCredits == null) {
-        extraCredits = 0;
-        extraCreditsLabel = "$0.00";
+      // Zero-balance layout: section + Buy Credits / Additional Credits, no money
+      if (
+        extraCredits == null &&
+        lines
+          .slice(i, i + 14)
+          .some((l) => /additional\s+credits?|buy\s+credits?|auto\s+top-?up/i.test(l))
+      ) {
+        const block = lines.slice(i, i + 14).join(" ");
+        if (!MONEY_RE.test(block) && !MONEY_RE_TRAILING.test(block)) {
+          extraCredits = 0;
+          extraCreditsLabel = "$0.00";
+        }
       }
       break;
     }
   }
 
-  // Section phrase without a $ amount anywhere nearby
-  if (
-    extraCredits == null &&
-    /extra\s+usage\s+credits?/i.test(flat || cleaned || "")
-  ) {
-    extraCredits = 0;
-    extraCreditsLabel = "$0.00";
+  // Last resort: first money token after "Extra Usage Credits" in flat text
+  if (extraCredits == null) {
+    const idx = (flat || "").search(/extra\s+usage\s+credits?/i);
+    if (idx >= 0) {
+      const tail = flat.slice(idx, idx + 500);
+      const mm = tail.match(MONEY_RE) || tail.match(MONEY_RE_TRAILING);
+      if (mm) trySet(mm[1]);
+      else if (/additional\s+credits?|buy\s+credits?/i.test(tail)) {
+        // Section present, no amount → $0
+        extraCredits = 0;
+        extraCreditsLabel = "$0.00";
+      }
+    }
   }
 
   return { extraCredits, extraCreditsLabel };
@@ -173,6 +222,9 @@ function parseUsageText(text) {
     .trim();
   // Flat string for patterns that span lines (Grok UI often splits "0%" / "used")
   const flat = cleaned.replace(/\n+/g, " ").replace(/ {2,}/g, " ");
+  // Promo badges ("Up to 40% Off") must never be read as SuperGrok usage
+  const flatUsage = stripPromoPercents(flat);
+  const cleanedUsage = stripPromoPercents(cleaned);
   const lines = cleaned
     .split("\n")
     .map((l) => l.trim())
@@ -182,49 +234,67 @@ function parseUsageText(text) {
   let overallFound = false;
 
   // Prefer explicit "used" phrasing (0% is valid - weekly pool unused)
+  // Do NOT use loose "usage … N%" — that matches "Extra Usage Credits … 40% Off"
   const overallPatterns = [
-    /(\d{1,3}(?:\.\d+)?)\s*%\s*used/i,
-    /used\s*[:\-]?\s*(\d{1,3}(?:\.\d+)?)\s*%/i,
-    /weekly\s+(?:supergrok\s+)?(?:limit|usage|pool)?[^\d%]{0,80}(\d{1,3}(?:\.\d+)?)\s*%/i,
-    /supergrok[^\d%]{0,40}(\d{1,3}(?:\.\d+)?)\s*%/i,
-    /(\d{1,3}(?:\.\d+)?)\s*%\s*(?:of\s+)?(?:your\s+)?(?:weekly|limit|pool)/i,
-    /(?:usage|limit)\s*[:\-]?\s*(\d{1,3}(?:\.\d+)?)\s*%/i,
+    /(\d{1,3}(?:\.\d+)?)\s*%\s*used\b/i,
+    /\bused\s*[:\-]?\s*(\d{1,3}(?:\.\d+)?)\s*%/i,
+    /weekly\s+supergrok\s+limit[\s\S]{0,80}?(\d{1,3}(?:\.\d+)?)\s*%/i,
+    /supergrok\s+limit[\s\S]{0,60}?(\d{1,3}(?:\.\d+)?)\s*%/i,
+    /(\d{1,3}(?:\.\d+)?)\s*%\s*(?:of\s+)?(?:your\s+)?(?:weekly|limit|pool)\b/i,
   ];
   for (const re of overallPatterns) {
-    const m = flat.match(re) || cleaned.match(re);
-    if (m) {
-      overallPercent = clampPct(parseFloat(m[1]));
-      overallFound = true;
-      break;
-    }
-  }
-
-  // Standalone large % near usage section (first strong % in text)
-  if (!overallFound) {
-    const firstPct = flat.match(
-      /(?:weekly|usage|limit|supergrok)[\s\S]{0,120}?(\d{1,3}(?:\.\d+)?)\s*%/i
+    const m = flatUsage.match(re) || cleanedUsage.match(re);
+    if (!m) continue;
+    // Guard: reject if the match itself is promo-flavored
+    const around = flatUsage.slice(
+      Math.max(0, (m.index ?? 0) - 12),
+      (m.index ?? 0) + m[0].length + 12
     );
-    if (firstPct) {
-      overallPercent = clampPct(parseFloat(firstPct[1]));
-      overallFound = true;
-    }
+    if (isPromoPercentContext(around) || isPromoPercentContext(m[0])) continue;
+    overallPercent = clampPct(parseFloat(m[1]));
+    overallFound = true;
+    break;
   }
 
-  // Multi-line: "Weekly SuperGrok Limit" then a line that is just "NN%"
+  // Multi-line: "Weekly SuperGrok Limit" then "NN%" / "NN% used" (skip promo lines)
   if (!overallFound) {
     for (let i = 0; i < lines.length; i++) {
       if (/weekly\s+supergrok|supergrok\s+limit|weekly\s+limit/i.test(lines[i])) {
-        for (let j = i + 1; j < Math.min(i + 6, lines.length); j++) {
-          const pm = lines[j].match(/^(\d{1,3}(?:\.\d+)?)\s*%$/);
-          if (pm) {
-            overallPercent = clampPct(parseFloat(pm[1]));
-            overallFound = true;
+        for (let j = i + 1; j < Math.min(i + 8, lines.length); j++) {
+          if (isPromoPercentContext(lines[j])) continue;
+          // Stop at credits / other sections
+          if (
+            /extra\s+usage\s+credits?|auto\s+top-?up|buy\s+credits?/i.test(
+              lines[j]
+            )
+          ) {
             break;
           }
-          // "0% used" on one line
           const um = lines[j].match(/^(\d{1,3}(?:\.\d+)?)\s*%\s*used$/i);
           if (um) {
             overallPercent = clampPct(parseFloat(um[1]));
+            overallFound = true;
+            break;
+          }
+          const pm = lines[j].match(/^(\d{1,3}(?:\.\d+)?)\s*%$/);
+          if (pm) {
+            // "0%" then "used" on the next line
+            if (j + 1 < lines.length && /^used$/i.test(lines[j + 1])) {
+              overallPercent = clampPct(parseFloat(pm[1]));
+              overallFound = true;
+              break;
+            }
+            // Bare "NN%" under the weekly limit heading (before Resets)
+            if (
+              j + 1 < lines.length &&
+              /resets?/i.test(lines[j + 1])
+            ) {
+              overallPercent = clampPct(parseFloat(pm[1]));
+              overallFound = true;
+              break;
+            }
+            // Or immediately after heading / "used" nearby in window
+            overallPercent = clampPct(parseFloat(pm[1]));
             overallFound = true;
             break;
           }
@@ -416,21 +486,27 @@ function hasUsageData(parsed) {
 
 /**
  * Merge network JSON usage with text/DOM scrape.
- * Network is preferred for overall % and categories; text fills credits/resets.
+ * Network is preferred for categories; text is preferred for overall when it
+ * has an explicit "% used" reading (avoids promo % leaking in via APIs/DOM).
+ * Credits/resets always fill from whichever side has them.
  */
 function mergeParsed(primary, secondary) {
   if (!primary) return secondary;
   if (!secondary) return primary;
   const out = { ...primary };
 
-  if (
-    (out.extraCredits == null || Number.isNaN(out.extraCredits)) &&
-    secondary.extraCredits != null &&
-    !Number.isNaN(secondary.extraCredits)
-  ) {
-    out.extraCredits = secondary.extraCredits;
-    out.extraCreditsLabel =
-      secondary.extraCreditsLabel || `$${Number(secondary.extraCredits).toFixed(2)}`;
+  // Credits: prefer non-null; if both set and secondary is non-zero while primary is 0, take secondary
+  if (secondary.extraCredits != null && !Number.isNaN(secondary.extraCredits)) {
+    if (
+      out.extraCredits == null ||
+      Number.isNaN(out.extraCredits) ||
+      (out.extraCredits === 0 && secondary.extraCredits > 0)
+    ) {
+      out.extraCredits = secondary.extraCredits;
+      out.extraCreditsLabel =
+        secondary.extraCreditsLabel ||
+        `$${Number(secondary.extraCredits).toFixed(2)}`;
+    }
   }
 
   if (!out.resetsDisplay && secondary.resetsDisplay) {
@@ -449,9 +525,21 @@ function mergeParsed(primary, secondary) {
     out.categories = secondary.categories;
   }
 
-  if (!out.overallFound && secondary.overallFound) {
-    out.overallPercent = secondary.overallPercent;
-    out.overallFound = true;
+  // Overall: prefer secondary (text/DOM) when it found usage and primary looks wrong
+  // (e.g. primary only has promo-ish values) or primary never found overall.
+  if (secondary.overallFound) {
+    if (!out.overallFound) {
+      out.overallPercent = secondary.overallPercent;
+      out.overallFound = true;
+    } else if (
+      // Text has a plausible reading that disagrees — trust text "% used" path
+      typeof secondary.overallPercent === "number" &&
+      typeof out.overallPercent === "number" &&
+      secondary.overallPercent !== out.overallPercent &&
+      secondary.resetsDisplay
+    ) {
+      out.overallPercent = secondary.overallPercent;
+    }
   }
 
   out.usageSection = Boolean(
@@ -548,6 +636,10 @@ function enrichFromDom(parsed, dom) {
       if (Number.isNaN(n) || n < 0 || n > 100) continue;
 
       const ctx = `${b.ariaLabel || ""} ${b.parentText || ""} ${b.text || ""}`;
+      // Never treat promo/discount chrome as usage meters
+      if (isPromoPercentContext(ctx) || /buy\s+credits?|top-?up|off\b/i.test(ctx)) {
+        continue;
+      }
       let matchedCat = false;
       for (const name of KNOWN_CATEGORIES) {
         if (new RegExp(name.replace(/ /g, "\\s+"), "i").test(ctx)) {
@@ -570,16 +662,21 @@ function enrichFromDom(parsed, dom) {
       if (
         !matchedCat &&
         !parsed.overallFound &&
-        /weekly|overall|super|limit|usage|pool/i.test(ctx)
+        /weekly\s+supergrok|supergrok\s+limit|%\s*used|\bused\b/i.test(ctx)
       ) {
         parsed.overallPercent = clampPct(n);
         parsed.overallFound = true;
       }
     }
 
-    // If still no overall, first bar with a valid % (including 0)
+    // If still no overall, first bar under weekly limit context only (not "any bar")
     if (!parsed.overallFound) {
       for (const b of dom.bars) {
+        const ctx = `${b.ariaLabel || ""} ${b.parentText || ""} ${b.text || ""}`;
+        if (isPromoPercentContext(ctx) || /buy\s+credits?|off\b/i.test(ctx)) {
+          continue;
+        }
+        if (!/weekly|supergrok|limit|%\s*used|\bused\b/i.test(ctx)) continue;
         let n = parseFloat(String(b.ariaNow ?? "").replace(/[^\d.]/g, ""));
         if (Number.isNaN(n)) {
           const w = String(b.childWidth || "");
@@ -601,9 +698,15 @@ function enrichFromDom(parsed, dom) {
       const n = parseFloat(p.text);
       if (Number.isNaN(n)) continue;
       const ctx = `${p.parent}\n${p.grand}`;
+      // "40%" inside "Up to 40% Off" badge
+      if (isPromoPercentContext(ctx) || /buy\s+credits?|\boff\b/i.test(ctx)) {
+        continue;
+      }
       let matchedCat = false;
       for (const name of KNOWN_CATEGORIES) {
         if (new RegExp(name.replace(/ /g, "\\s+"), "i").test(ctx)) {
+          // Don't treat "Buy Credits" region category ghosts
+          if (/buy\s+credits?|extra\s+usage\s+credits?/i.test(ctx)) continue;
           const display = name === "Build" ? "Grok Build" : name;
           const id = slug(display);
           if (!parsed.categories.some((c) => c.id === id)) {
@@ -623,7 +726,8 @@ function enrichFromDom(parsed, dom) {
       if (
         !matchedCat &&
         !parsed.overallFound &&
-        /used|weekly|supergrok|limit|usage|pool/i.test(ctx)
+        // Require real usage wording — bare "usage" also matches "Extra Usage Credits"
+        /%\s*used|\bused\b|weekly\s+supergrok|supergrok\s+limit/i.test(ctx)
       ) {
         parsed.overallPercent = clampPct(n);
         parsed.overallFound = true;
@@ -631,21 +735,37 @@ function enrichFromDom(parsed, dom) {
     }
   }
 
-  // Money nodes near Extra Usage Credits / Balance
+  // Money nodes near Extra Usage Credits / Balance / Additional Credits
   if (
     (parsed.extraCredits == null || Number.isNaN(parsed.extraCredits)) &&
     dom.moneyNodes?.length
   ) {
-    for (const m of dom.moneyNodes) {
+    // Prefer nodes whose context is the credits balance, not purchase buttons
+    const ranked = [...dom.moneyNodes].sort((a, b) => {
+      const score = (m) => {
+        const ctx = `${m.parent || ""}\n${m.grand || ""}`;
+        let s = 0;
+        if (/additional\s+credits?/i.test(ctx)) s += 5;
+        if (/extra\s+usage\s+credits?/i.test(ctx)) s += 4;
+        if (/balance/i.test(ctx)) s += 3;
+        if (/buy\s+credits?/i.test(ctx)) s -= 2;
+        return s;
+      };
+      return score(b) - score(a);
+    });
+    for (const m of ranked) {
       const ctx = `${m.parent || ""}\n${m.grand || ""}`;
       if (
-        !/extra\s+usage\s+credits?|credit\s+balance|additional\s+credits?|top-?up|buy\s+credits?/i.test(
+        !/extra\s+usage\s+credits?|credit\s+balance|additional\s+credits?/i.test(
           ctx
         )
       ) {
         continue;
       }
-      const mm = String(m.text).match(/([\d,]+(?:\.\d+)?)/);
+      const mm =
+        String(m.text).match(MONEY_RE) ||
+        String(m.text).match(MONEY_RE_TRAILING) ||
+        String(m.text).match(/([\d,]+(?:\.\d+)?)/);
       if (!mm) continue;
       const val = parseMoney(mm[1]);
       if (val != null && val >= 0 && val < 1_000_000) {
