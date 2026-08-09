@@ -158,15 +158,13 @@ function parseExtraCredits(flat, cleaned, lines) {
           if (plain && trySet(plain[1])) break;
         }
       }
-      // Zero-balance layout: section + Buy Credits / Additional Credits, no money
-      if (
-        extraCredits == null &&
-        lines
-          .slice(i, i + 14)
-          .some((l) => /additional\s+credits?|buy\s+credits?|auto\s+top-?up/i.test(l))
-      ) {
-        const block = lines.slice(i, i + 14).join(" ");
-        if (!MONEY_RE.test(block) && !MONEY_RE_TRAILING.test(block)) {
+      // Only default to $0 when we *explicitly* see a zero money token
+      if (extraCredits == null) {
+        const block = lines.slice(i, Math.min(i + 14, lines.length)).join("\n");
+        const zero = block.match(
+          /(?:US\s*[\$＄]|USD\s*|[\$＄])\s*0(?:\.0+)?\b/i
+        );
+        if (zero) {
           extraCredits = 0;
           extraCreditsLabel = "$0.00";
         }
@@ -180,13 +178,24 @@ function parseExtraCredits(flat, cleaned, lines) {
     const idx = (flat || "").search(/extra\s+usage\s+credits?/i);
     if (idx >= 0) {
       const tail = flat.slice(idx, idx + 500);
-      const mm = tail.match(MONEY_RE) || tail.match(MONEY_RE_TRAILING);
+      // Prefer amount before "Additional Credits" / "Buy Credits"
+      const head =
+        tail.split(/additional\s+credits?/i)[0] ||
+        tail.split(/buy\s+credits?/i)[0] ||
+        tail;
+      const mm =
+        head.match(MONEY_RE) ||
+        head.match(MONEY_RE_TRAILING) ||
+        tail.match(MONEY_RE) ||
+        tail.match(MONEY_RE_TRAILING) ||
+        // plain 1.76 before Additional Credits
+        head.match(/\b([\d,]+\.\d{2})\b/);
       if (mm) trySet(mm[1]);
-      else if (/additional\s+credits?|buy\s+credits?/i.test(tail)) {
-        // Section present, no amount → $0
+      else if (/(?:US\s*[\$＄]|[\$＄])\s*0(?:\.0+)?\b/i.test(tail)) {
         extraCredits = 0;
         extraCreditsLabel = "$0.00";
       }
+      // Do NOT invent $0 just because the section exists without a readable amount
     }
   }
 
@@ -550,6 +559,7 @@ function mergeParsed(primary, secondary) {
 async function deepScrape(page) {
   return page.evaluate(() => {
     const bodyText = document.body?.innerText || "";
+    const bodyTextContent = document.body?.textContent || "";
     const html = document.body?.innerHTML?.slice(0, 200_000) || "";
 
     const bars = [];
@@ -579,44 +589,264 @@ async function deepScrape(page) {
 
     // Any element whose text is just "NN%"
     const pctNodes = [];
-    // Currency-like leaves (US$0.00, $15, 0.00 USD)
+    // Currency-like leaves (US$0.00, $15, 0.00 USD, plain 1.76)
     const moneyNodes = [];
+    const moneyLeafRe =
+      /^(?:US\s*[\$＄﹩]|USD\s*|U\.?S\.?\s*[\$＄﹩]|[\$＄﹩])\s*[\d,]+(?:\.\d+)?$|^[\d,]+(?:\.\d{1,2})?\s*(?:USD|US\s*[\$＄﹩])$|^[\d,]+\.\d{2}$/i;
+
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
     let node;
     while ((node = walker.nextNode())) {
-      const t = (node.innerText || "").trim();
-      if (/^\d{1,3}(?:\.\d+)?\s*%$/.test(t) && t.length < 8) {
+      // Prefer direct text only for leaves (avoid huge parent blocks)
+      const ownText = Array.from(node.childNodes)
+        .filter((n) => n.nodeType === Node.TEXT_NODE)
+        .map((n) => (n.textContent || "").trim())
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+      const t = (ownText || (node.children.length === 0 ? (node.innerText || "").trim() : "")).trim();
+      if (!t || t.length > 32) {
+        // also allow short innerText for true leaves
+        const it = (node.innerText || "").trim();
+        if (!(node.children.length === 0 && it && it.length < 24)) {
+          // fall through for % leaves only
+          if (/^\d{1,3}(?:\.\d+)?\s*%$/.test(it) && it.length < 8) {
+            const parent = node.parentElement;
+            pctNodes.push({
+              text: it,
+              parent: (parent?.innerText || "").slice(0, 200),
+              grand: (parent?.parentElement?.innerText || "").slice(0, 200),
+            });
+          }
+          continue;
+        }
+      }
+      const leaf = t || (node.innerText || "").trim();
+      if (/^\d{1,3}(?:\.\d+)?\s*%$/.test(leaf) && leaf.length < 8) {
         const parent = node.parentElement;
         pctNodes.push({
-          text: t,
+          text: leaf,
           parent: (parent?.innerText || "").slice(0, 200),
           grand: (parent?.parentElement?.innerText || "").slice(0, 200),
         });
-        if (pctNodes.length > 40) break;
+        if (pctNodes.length > 40) {
+          /* keep scanning money */
+        }
       }
-      if (
-        moneyNodes.length < 40 &&
-        t.length > 0 &&
-        t.length < 24 &&
-        /^(?:US\s*\$|\$)\s*[\d,]+(?:\.\d+)?$|^[\d,]+(?:\.\d{1,2})?\s*(?:USD|US\$)$/i.test(
-          t
-        )
-      ) {
+      if (moneyNodes.length < 60 && leaf && leaf.length < 28 && moneyLeafRe.test(leaf)) {
         const parent = node.parentElement;
         moneyNodes.push({
-          text: t,
-          parent: (parent?.innerText || "").slice(0, 240),
-          grand: (parent?.parentElement?.innerText || "").slice(0, 240),
+          text: leaf,
+          parent: (parent?.innerText || "").slice(0, 300),
+          grand: (parent?.parentElement?.innerText || "").slice(0, 300),
         });
+      }
+    }
+
+    /**
+     * Dedicated Extra Usage Credits card scrape.
+     * Grok layout uses a custom <number-flow-react aria-label="$1.76" role="img">
+     * element — the amount is NOT in innerText, only in aria-label.
+     */
+    let creditsFromDom = null;
+    let creditsFromDomSource = null;
+    const creditSamples = [];
+
+    const parseAmt = (raw) => {
+      if (raw == null) return null;
+      const n = parseFloat(String(raw).replace(/,/g, "").replace(/[^\d.-]/g, ""));
+      return Number.isNaN(n) || n < 0 || n >= 1_000_000 ? null : n;
+    };
+
+    const moneyIn = (s) => {
+      const str = String(s || "");
+      // Normalize odd spaces / currency glyphs
+      const norm = str
+        .replace(/[\u00a0\u202f\u2007\u2009]/g, " ")
+        .replace(/[＄﹩]/g, "$");
+      const patterns = [
+        /(?:US\s*\$|USD\s*|U\.?S\.?\s*\$|\$)\s*([\d,]+(?:\.\d+)?)/i,
+        /([\d,]+(?:\.\d+)?)\s*(?:USD|US\s*\$)/i,
+        // Plain dollars-and-cents next to credits wording
+        /(?:^|[^\d])([\d,]+\.\d{2})(?:\s|$)/,
+      ];
+      for (const re of patterns) {
+        const m = norm.match(re);
+        if (m) {
+          const v = parseAmt(m[1]);
+          if (v != null) return v;
+        }
+      }
+      return null;
+    };
+
+    // Strategy 0 (primary): number-flow-react / aria-label currency near credits
+    // Example: <number-flow-react aria-label="$1.76" role="img"></number-flow-react>
+    //          <span>Additional Credits</span>
+    {
+      const ariaEls = Array.from(
+        document.querySelectorAll(
+          'number-flow-react, [aria-label*="$"], [aria-label*="US$"], [aria-label*="USD"], [role="img"][aria-label]'
+        )
+      );
+      for (const el of ariaEls) {
+        const label = el.getAttribute("aria-label") || "";
+        const v = moneyIn(label);
+        if (v == null) continue;
+        const parentText = (
+          el.closest("div,section,li,article")?.innerText ||
+          el.parentElement?.innerText ||
+          ""
+        ).slice(0, 400);
+        const nearCredits =
+          /additional\s+credits?|extra\s+usage\s+credits?|buy\s+credits?/i.test(
+            parentText
+          ) ||
+          /additional\s+credits?|extra\s+usage\s+credits?/i.test(
+            (el.parentElement?.nextElementSibling?.innerText || "") +
+              (el.nextElementSibling?.innerText || "")
+          );
+        creditSamples.push(
+          `aria: ${label} | near=${nearCredits} | parent=${parentText
+            .slice(0, 80)
+            .replace(/\n/g, " | ")}`
+        );
+        if (nearCredits || /number-flow/i.test(el.tagName)) {
+          // number-flow under Extra Usage Credits card is almost always the balance
+          if (
+            nearCredits ||
+            /additional\s+credits?/i.test(
+              el.parentElement?.innerText ||
+                el.parentElement?.parentElement?.innerText ||
+                ""
+            )
+          ) {
+            creditsFromDom = v;
+            creditsFromDomSource = "aria-label-number-flow";
+            break;
+          }
+        }
+      }
+      // If still null, take first currency aria-label that sits next to "Additional Credits"
+      if (creditsFromDom == null) {
+        for (const el of ariaEls) {
+          const label = el.getAttribute("aria-label") || "";
+          const v = moneyIn(label);
+          if (v == null) continue;
+          let sib = el.nextElementSibling;
+          const sibText = [
+            el.nextElementSibling?.innerText,
+            el.parentElement?.innerText,
+          ]
+            .filter(Boolean)
+            .join(" ");
+          if (/additional\s+credits?/i.test(sibText)) {
+            creditsFromDom = v;
+            creditsFromDomSource = "aria-label-sibling-additional";
+            creditSamples.push(`aria-sib: ${label}`);
+            break;
+          }
+          void sib;
+        }
+      }
+    }
+
+    // Strategy A: find "Additional Credits" label → look at previous siblings / parent block
+    const allEls = Array.from(document.querySelectorAll("div, span, p, h1, h2, h3, h4, h5, label, strong, b, button"));
+    for (const el of allEls) {
+      const direct = (el.innerText || "").trim();
+      if (!/^additional\s+credits?$/i.test(direct) && !/^additional\s+credits?\b/i.test(direct)) {
+        // allow slightly longer if it's only that phrase + whitespace
+        if (!/^additional\s+credits?\s*$/i.test(direct.replace(/\s+/g, " "))) continue;
+      }
+      // Previous element siblings
+      let sib = el.previousElementSibling;
+      for (let k = 0; k < 4 && sib; k++, sib = sib.previousElementSibling) {
+        const st = (sib.innerText || sib.textContent || "").trim();
+        creditSamples.push(`prev-sib: ${st.slice(0, 80)}`);
+        const v = moneyIn(st);
+        if (v != null) {
+          creditsFromDom = v;
+          creditsFromDomSource = "additional-credits-prev-sibling";
+          break;
+        }
+      }
+      if (creditsFromDom != null) break;
+
+      // Parent card text (often "US$1.76\nAdditional Credits\nBuy Credits…")
+      let card = el.parentElement;
+      for (let up = 0; up < 6 && card; up++, card = card.parentElement) {
+        const ct = (card.innerText || "").trim();
+        if (ct.length > 800) continue;
+        if (!/additional\s+credits?/i.test(ct)) continue;
+        creditSamples.push(`card: ${ct.slice(0, 160).replace(/\n/g, " | ")}`);
+        // Prefer amount that appears BEFORE "Additional Credits"
+        const before = ct.split(/additional\s+credits?/i)[0] || "";
+        let v = moneyIn(before);
+        if (v == null) v = moneyIn(ct);
+        if (v != null) {
+          creditsFromDom = v;
+          creditsFromDomSource = "additional-credits-card";
+          break;
+        }
+      }
+      if (creditsFromDom != null) break;
+    }
+
+    // Strategy B: "Extra Usage Credits" heading → nearest card → first money token
+    if (creditsFromDom == null) {
+      for (const el of allEls) {
+        const direct = (el.innerText || "").replace(/\s+/g, " ").trim();
+        if (!/^extra\s+usage\s+credits?/i.test(direct)) continue;
+        if (direct.length > 60) continue; // skip long help copy
+        let card = el.parentElement;
+        for (let up = 0; up < 8 && card; up++, card = card.parentElement) {
+          const ct = (card.innerText || "").trim();
+          if (ct.length < 5 || ct.length > 1200) continue;
+          if (!/extra\s+usage\s+credits?/i.test(ct)) continue;
+          // Ignore auto top-up only blocks without a balance
+          creditSamples.push(`euc-card: ${ct.slice(0, 200).replace(/\n/g, " | ")}`);
+          // Take first money after the heading, before Auto Top-Up if present
+          const afterHeading = ct.replace(/^[\s\S]*?extra\s+usage\s+credits?/i, "");
+          const beforeTopUp = afterHeading.split(/auto\s+top-?up/i)[0] || afterHeading;
+          const v = moneyIn(beforeTopUp);
+          if (v != null) {
+            creditsFromDom = v;
+            creditsFromDomSource = "extra-usage-credits-card";
+            break;
+          }
+        }
+        if (creditsFromDom != null) break;
+      }
+    }
+
+    // Strategy C: scan body textContent (sometimes differs from innerText)
+    if (creditsFromDom == null) {
+      const blob = `${bodyText}\n${bodyTextContent}`;
+      const idx = blob.search(/extra\s+usage\s+credits?/i);
+      if (idx >= 0) {
+        const tail = blob.slice(idx, idx + 600);
+        creditSamples.push(`body-tail: ${tail.slice(0, 200).replace(/\n/g, " | ")}`);
+        const beforeTopUp = tail.split(/auto\s+top-?up/i)[0] || tail;
+        const beforeBuy = beforeTopUp.split(/buy\s+credits?/i)[0] || beforeTopUp;
+        const v = moneyIn(beforeBuy) ?? moneyIn(beforeTopUp);
+        if (v != null) {
+          creditsFromDom = v;
+          creditsFromDomSource = "body-text-tail";
+        }
       }
     }
 
     return {
       bodyText,
+      bodyTextContent: bodyTextContent.slice(0, 50_000),
       htmlSnippet: html.slice(0, 8000),
       bars,
       pctNodes,
       moneyNodes,
+      creditsFromDom,
+      creditsFromDomSource,
+      creditSamples: creditSamples.slice(0, 12),
       title: document.title,
       url: location.href,
     };
@@ -735,9 +965,27 @@ function enrichFromDom(parsed, dom) {
     }
   }
 
+  // Highest-confidence: dedicated DOM card scrape
+  if (
+    (parsed.extraCredits == null ||
+      Number.isNaN(parsed.extraCredits) ||
+      parsed.extraCredits === 0) &&
+    dom.creditsFromDom != null &&
+    !Number.isNaN(dom.creditsFromDom)
+  ) {
+    // Prefer non-zero DOM reading over a defaulted 0
+    if (parsed.extraCredits == null || parsed.extraCredits === 0 || dom.creditsFromDom > 0) {
+      parsed.extraCredits = dom.creditsFromDom;
+      parsed.extraCreditsLabel = `$${Number(dom.creditsFromDom).toFixed(2)}`;
+      parsed.creditsSource = dom.creditsFromDomSource || "dom-card";
+    }
+  }
+
   // Money nodes near Extra Usage Credits / Balance / Additional Credits
   if (
-    (parsed.extraCredits == null || Number.isNaN(parsed.extraCredits)) &&
+    (parsed.extraCredits == null ||
+      Number.isNaN(parsed.extraCredits) ||
+      parsed.extraCredits === 0) &&
     dom.moneyNodes?.length
   ) {
     // Prefer nodes whose context is the credits balance, not purchase buttons
@@ -765,33 +1013,47 @@ function enrichFromDom(parsed, dom) {
       const mm =
         String(m.text).match(MONEY_RE) ||
         String(m.text).match(MONEY_RE_TRAILING) ||
+        String(m.text).match(/^([\d,]+\.\d{2})$/) ||
         String(m.text).match(/([\d,]+(?:\.\d+)?)/);
       if (!mm) continue;
       const val = parseMoney(mm[1]);
       if (val != null && val >= 0 && val < 1_000_000) {
-        parsed.extraCredits = val;
-        parsed.extraCreditsLabel = `$${val.toFixed(2)}`;
+        if (parsed.extraCredits == null || parsed.extraCredits === 0 || val > 0) {
+          parsed.extraCredits = val;
+          parsed.extraCreditsLabel = `$${val.toFixed(2)}`;
+          parsed.creditsSource = "money-node";
+        }
         break;
       }
     }
   }
 
-  // Text path again on body (covers cases where network path skipped it)
+  // Text path on bodyText + textContent (covers network path skip / odd render)
   if (
-    (parsed.extraCredits == null || Number.isNaN(parsed.extraCredits)) &&
-    dom.bodyText
+    parsed.extraCredits == null ||
+    Number.isNaN(parsed.extraCredits) ||
+    parsed.extraCredits === 0
   ) {
-    const fromText = parseExtraCredits(
-      dom.bodyText.replace(/\n+/g, " ").replace(/ {2,}/g, " "),
-      dom.bodyText,
-      (dom.bodyText || "")
-        .split("\n")
-        .map((l) => l.trim())
-        .filter(Boolean)
-    );
-    if (fromText.extraCredits != null) {
-      parsed.extraCredits = fromText.extraCredits;
-      parsed.extraCreditsLabel = fromText.extraCreditsLabel;
+    const blobs = [dom.bodyText, dom.bodyTextContent].filter(Boolean);
+    for (const blob of blobs) {
+      const fromText = parseExtraCredits(
+        blob.replace(/\n+/g, " ").replace(/ {2,}/g, " "),
+        blob,
+        blob
+          .split("\n")
+          .map((l) => l.trim())
+          .filter(Boolean)
+      );
+      if (
+        fromText.extraCredits != null &&
+        (parsed.extraCredits == null ||
+          (parsed.extraCredits === 0 && fromText.extraCredits > 0))
+      ) {
+        parsed.extraCredits = fromText.extraCredits;
+        parsed.extraCreditsLabel = fromText.extraCreditsLabel;
+        parsed.creditsSource = "text";
+        if (fromText.extraCredits > 0) break;
+      }
     }
   }
 
@@ -1181,10 +1443,16 @@ function writeDebug(debugDir, dom, note) {
         `NOTE: ${note}`,
         `URL: ${dom.url}`,
         `TITLE: ${dom.title}`,
+        `CREDITS_FROM_DOM: ${dom.creditsFromDom}`,
+        `CREDITS_SOURCE: ${dom.creditsFromDomSource}`,
+        `CREDIT_SAMPLES: ${JSON.stringify(dom.creditSamples || [], null, 2)}`,
+        `MONEY_NODES: ${JSON.stringify(dom.moneyNodes || [], null, 2)}`,
         `BARS: ${JSON.stringify(dom.bars, null, 2)}`,
         `PCT_NODES: ${JSON.stringify(dom.pctNodes, null, 2)}`,
         "----- BODY TEXT -----",
         dom.bodyText,
+        "----- BODY TEXT CONTENT -----",
+        (dom.bodyTextContent || "").slice(0, 8000),
         "----- HTML SNIPPET -----",
         dom.htmlSnippet,
       ].join("\n\n"),
@@ -1273,7 +1541,71 @@ async function main() {
 
     await openUsagePanel(page, usageUrl, timeout);
 
+    // Give the credits card a moment to paint (balance often hydrates after %)
+    try {
+      await page
+        .getByText(/extra\s+usage\s+credits?/i)
+        .first()
+        .waitFor({ state: "visible", timeout: 8000 });
+      await page.waitForTimeout(800);
+    } catch {
+      /* panel may still be usable */
+    }
+
     let dom = await deepScrape(page);
+
+    // Playwright locator fallback for credits card (more reliable than body text alone)
+    if (dom.creditsFromDom == null) {
+      try {
+        const viaLocator = await page.evaluate(() => {
+          const moneyIn = (s) => {
+            const norm = String(s || "")
+              .replace(/[\u00a0\u202f\u2007\u2009]/g, " ")
+              .replace(/[＄﹩]/g, "$");
+            const m =
+              norm.match(/(?:US\s*\$|USD\s*|\$)\s*([\d,]+(?:\.\d+)?)/i) ||
+              norm.match(/\b([\d,]+\.\d{2})\b/);
+            if (!m) return null;
+            const n = parseFloat(m[1].replace(/,/g, ""));
+            return Number.isNaN(n) ? null : n;
+          };
+          const candidates = Array.from(
+            document.querySelectorAll("div, section, article, li")
+          );
+          for (const el of candidates) {
+            const t = (el.innerText || "").trim();
+            if (t.length < 8 || t.length > 500) continue;
+            if (
+              /extra\s+usage\s+credits?/i.test(t) &&
+              /additional\s+credits?/i.test(t)
+            ) {
+              const before = t.split(/additional\s+credits?/i)[0];
+              const v = moneyIn(before) ?? moneyIn(t);
+              if (v != null) return { amount: v, sample: t.slice(0, 200) };
+            }
+          }
+          // XPath-like: any element whose own text is Additional Credits
+          for (const el of document.querySelectorAll("div, span, p")) {
+            if (!/^additional\s+credits?$/i.test((el.innerText || "").trim()))
+              continue;
+            const parent = el.parentElement;
+            if (!parent) continue;
+            const v = moneyIn(parent.innerText);
+            if (v != null)
+              return { amount: v, sample: (parent.innerText || "").slice(0, 200) };
+          }
+          return null;
+        });
+        if (viaLocator?.amount != null) {
+          dom.creditsFromDom = viaLocator.amount;
+          dom.creditsFromDomSource = "locator-fallback";
+          if (!dom.creditSamples) dom.creditSamples = [];
+          dom.creditSamples.push(`locator: ${viaLocator.sample}`);
+        }
+      } catch {
+        /* ignore */
+      }
+    }
 
     // Login wait when headed
     if (looksLoggedOut(dom.bodyText, dom.url) && headed) {
@@ -1323,6 +1655,17 @@ async function main() {
     // Prefer network JSON for usage %, but always merge text/DOM for credits + resets
     let textParsed = parseUsageText(dom.bodyText);
     textParsed = enrichFromDom(textParsed, dom);
+    // Also try textContent if bodyText missed the currency glyph
+    if (
+      (textParsed.extraCredits == null || textParsed.extraCredits === 0) &&
+      dom.bodyTextContent
+    ) {
+      const alt = parseUsageText(dom.bodyTextContent);
+      if (alt.extraCredits != null && alt.extraCredits > 0) {
+        textParsed.extraCredits = alt.extraCredits;
+        textParsed.extraCreditsLabel = alt.extraCreditsLabel;
+      }
+    }
 
     let parsed = tryParseNetworkJson(networkBodies);
     if (parsed) {
@@ -1336,14 +1679,43 @@ async function main() {
       parsed = textParsed;
     }
 
+    // Re-apply DOM credit scrape after merge (network must not clobber a real balance with 0)
+    if (dom.creditsFromDom != null && !Number.isNaN(dom.creditsFromDom)) {
+      if (
+        parsed.extraCredits == null ||
+        Number.isNaN(parsed.extraCredits) ||
+        (parsed.extraCredits === 0 && dom.creditsFromDom > 0) ||
+        (dom.creditsFromDom > 0 &&
+          Math.abs(parsed.extraCredits - dom.creditsFromDom) > 0.001)
+      ) {
+        // Prefer explicit DOM card amount when non-zero
+        if (dom.creditsFromDom > 0 || parsed.extraCredits == null) {
+          parsed.extraCredits = dom.creditsFromDom;
+          parsed.extraCreditsLabel = `$${Number(dom.creditsFromDom).toFixed(2)}`;
+        }
+      }
+    }
+
     // Dedicated network credit scan (wallet/billing APIs without usage %)
     const netCredits = extractCreditsFromNetwork(networkBodies);
+    if (netCredits != null) {
+      if (
+        parsed.extraCredits == null ||
+        Number.isNaN(parsed.extraCredits) ||
+        (parsed.extraCredits === 0 && netCredits > 0)
+      ) {
+        parsed.extraCredits = netCredits;
+        parsed.extraCreditsLabel = `$${Number(netCredits).toFixed(2)}`;
+      }
+    }
+
+    // If usage is fine but credits still missing, dump a debug file for diagnosis
     if (
-      netCredits != null &&
-      (parsed.extraCredits == null || Number.isNaN(parsed.extraCredits))
+      hasUsageData(parsed) &&
+      (parsed.extraCredits == null || Number.isNaN(parsed.extraCredits)) &&
+      /extra\s+usage\s+credits?/i.test(dom.bodyText || "")
     ) {
-      parsed.extraCredits = netCredits;
-      parsed.extraCreditsLabel = `$${Number(netCredits).toFixed(2)}`;
+      writeDebug(debugDir, dom, "credits_missing");
     }
 
     if (!hasUsageData(parsed)) {
