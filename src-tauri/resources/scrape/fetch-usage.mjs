@@ -54,6 +54,96 @@ function clampPct(n) {
   return Math.max(0, Math.min(100, Math.round(n * 10) / 10));
 }
 
+/** Parse a currency amount string like "15", "15.00", "1,234.5". */
+function parseMoney(raw) {
+  if (raw == null) return null;
+  const n = parseFloat(String(raw).replace(/,/g, "").replace(/[^\d.-]/g, ""));
+  return Number.isNaN(n) ? null : n;
+}
+
+/**
+ * Extract Extra Usage Credits balance from page text.
+ * Grok layouts vary:
+ *  - "Extra Usage Credits Balance Buy More US$0.00"
+ *  - "Extra Usage Credits" then "Additional Credits" / "Buy Credits" (no $ when $0)
+ *  - "$15 in extra usage credits"
+ */
+function parseExtraCredits(flat, cleaned, lines) {
+  let extraCredits = null;
+  let extraCreditsLabel = null;
+
+  const creditPatterns = [
+    // Section heading then optional words then US$ / $ amount
+    /extra\s+usage\s+credits?[\s\S]{0,120}?(?:US\s*\$|\$)\s*([\d,]+(?:\.\d+)?)/i,
+    /(?:US\s*\$|\$)\s*([\d,]+(?:\.\d+)?)\s*(?:in\s+)?extra\s+(?:usage\s+)?credits?/i,
+    // Balance line near credits
+    /(?:credit\s+)?balance\s*[:\-]?\s*(?:US\s*\$|\$)\s*([\d,]+(?:\.\d+)?)/i,
+    /(?:US\s*\$|\$)\s*([\d,]+(?:\.\d+)?)\s*(?:credit\s+)?balance/i,
+    // Additional credits / prepaid
+    /additional\s+credits?\s*[:\-]?\s*(?:US\s*\$|\$)\s*([\d,]+(?:\.\d+)?)/i,
+    /credits?\s+(?:balance|remaining|available)?\s*[:\-]?\s*(?:US\s*\$|\$)\s*([\d,]+(?:\.\d+)?)/i,
+    // Bare amount after heading (less specific — last resort among patterns)
+    /extra\s+usage\s+credits?\s*[:\-]?\s*([\d,]+(?:\.\d+)?)\b/i,
+  ];
+
+  for (const re of creditPatterns) {
+    const m = flat.match(re) || cleaned.match(re);
+    if (m) {
+      const val = parseMoney(m[1]);
+      if (val != null && val >= 0 && val < 1_000_000) {
+        extraCredits = val;
+        extraCreditsLabel = `$${val.toFixed(2)}`;
+        break;
+      }
+    }
+  }
+
+  // Multi-line: "Extra Usage Credits" then a nearby money line or plain number
+  if (extraCredits == null && Array.isArray(lines)) {
+    for (let i = 0; i < lines.length; i++) {
+      if (!/extra\s+usage\s+credits?/i.test(lines[i])) continue;
+      for (let j = i; j < Math.min(i + 10, lines.length); j++) {
+        const money = lines[j].match(/(?:US\s*\$|\$)\s*([\d,]+(?:\.\d+)?)/i);
+        if (money) {
+          const val = parseMoney(money[1]);
+          if (val != null && val >= 0 && val < 1_000_000) {
+            extraCredits = val;
+            extraCreditsLabel = `$${val.toFixed(2)}`;
+            break;
+          }
+        }
+        // Plain "0.00" / "15.00" on its own line under the section
+        const plain = lines[j].match(/^([\d,]+(?:\.\d{1,2})?)\s*(?:USD|US\$)?$/i);
+        if (plain && j > i) {
+          const val = parseMoney(plain[1]);
+          if (val != null && val >= 0 && val < 1_000_000) {
+            extraCredits = val;
+            extraCreditsLabel = `$${val.toFixed(2)}`;
+            break;
+          }
+        }
+      }
+      // Section is present but no amount rendered (common when balance is $0)
+      if (extraCredits == null) {
+        extraCredits = 0;
+        extraCreditsLabel = "$0.00";
+      }
+      break;
+    }
+  }
+
+  // Section phrase without a $ amount anywhere nearby
+  if (
+    extraCredits == null &&
+    /extra\s+usage\s+credits?/i.test(flat || cleaned || "")
+  ) {
+    extraCredits = 0;
+    extraCreditsLabel = "$0.00";
+  }
+
+  return { extraCredits, extraCreditsLabel };
+}
+
 const KNOWN_CATEGORIES = [
   "Grok Build",
   "Build",
@@ -273,21 +363,9 @@ function parseUsageText(text) {
     }
   }
 
-  let extraCredits = null;
-  let extraCreditsLabel = null;
-  const creditPatterns = [
-    /extra\s+usage\s+credits?\s*[:\-]?\s*\$?\s*([\d,]+(?:\.\d+)?)/i,
-    /\$\s*([\d,]+(?:\.\d+)?)\s*(?:in\s+)?extra\s+(?:usage\s+)?credits?/i,
-    /credits?\s+(?:balance|remaining)?\s*[:\-]?\s*\$?\s*([\d,]+(?:\.\d+)?)/i,
-  ];
-  for (const re of creditPatterns) {
-    const m = flat.match(re) || cleaned.match(re);
-    if (m) {
-      extraCredits = parseFloat(m[1].replace(/,/g, ""));
-      extraCreditsLabel = m[0].trim();
-      break;
-    }
-  }
+  const credits = parseExtraCredits(flat, cleaned, lines);
+  let extraCredits = credits.extraCredits;
+  let extraCreditsLabel = credits.extraCreditsLabel;
 
   if (!overallFound && categories.length) {
     // Don't invent overall from average of categories - use max as rough signal only if no overall
@@ -335,6 +413,52 @@ function hasUsageData(parsed) {
   }
   return false;
 }
+
+/**
+ * Merge network JSON usage with text/DOM scrape.
+ * Network is preferred for overall % and categories; text fills credits/resets.
+ */
+function mergeParsed(primary, secondary) {
+  if (!primary) return secondary;
+  if (!secondary) return primary;
+  const out = { ...primary };
+
+  if (
+    (out.extraCredits == null || Number.isNaN(out.extraCredits)) &&
+    secondary.extraCredits != null &&
+    !Number.isNaN(secondary.extraCredits)
+  ) {
+    out.extraCredits = secondary.extraCredits;
+    out.extraCreditsLabel =
+      secondary.extraCreditsLabel || `$${Number(secondary.extraCredits).toFixed(2)}`;
+  }
+
+  if (!out.resetsDisplay && secondary.resetsDisplay) {
+    out.resetsDisplay = secondary.resetsDisplay;
+    out.resetsDate = secondary.resetsDate || out.resetsDate || "";
+    out.resetsTime = secondary.resetsTime || out.resetsTime || "";
+  } else if (!out.resetsDate && secondary.resetsDate) {
+    out.resetsDate = secondary.resetsDate;
+    out.resetsTime = secondary.resetsTime || out.resetsTime || "";
+  }
+
+  if (
+    (!out.categories || out.categories.length === 0) &&
+    secondary.categories?.length
+  ) {
+    out.categories = secondary.categories;
+  }
+
+  if (!out.overallFound && secondary.overallFound) {
+    out.overallPercent = secondary.overallPercent;
+    out.overallFound = true;
+  }
+
+  out.usageSection = Boolean(
+    out.usageSection || secondary.usageSection || hasUsageData(out)
+  );
+  return out;
+}
 async function deepScrape(page) {
   return page.evaluate(() => {
     const bodyText = document.body?.innerText || "";
@@ -367,6 +491,8 @@ async function deepScrape(page) {
 
     // Any element whose text is just "NN%"
     const pctNodes = [];
+    // Currency-like leaves (US$0.00, $15, 0.00 USD)
+    const moneyNodes = [];
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
     let node;
     while ((node = walker.nextNode())) {
@@ -380,6 +506,21 @@ async function deepScrape(page) {
         });
         if (pctNodes.length > 40) break;
       }
+      if (
+        moneyNodes.length < 40 &&
+        t.length > 0 &&
+        t.length < 24 &&
+        /^(?:US\s*\$|\$)\s*[\d,]+(?:\.\d+)?$|^[\d,]+(?:\.\d{1,2})?\s*(?:USD|US\$)$/i.test(
+          t
+        )
+      ) {
+        const parent = node.parentElement;
+        moneyNodes.push({
+          text: t,
+          parent: (parent?.innerText || "").slice(0, 240),
+          grand: (parent?.parentElement?.innerText || "").slice(0, 240),
+        });
+      }
     }
 
     return {
@@ -387,6 +528,7 @@ async function deepScrape(page) {
       htmlSnippet: html.slice(0, 8000),
       bars,
       pctNodes,
+      moneyNodes,
       title: document.title,
       url: location.href,
     };
@@ -489,6 +631,50 @@ function enrichFromDom(parsed, dom) {
     }
   }
 
+  // Money nodes near Extra Usage Credits / Balance
+  if (
+    (parsed.extraCredits == null || Number.isNaN(parsed.extraCredits)) &&
+    dom.moneyNodes?.length
+  ) {
+    for (const m of dom.moneyNodes) {
+      const ctx = `${m.parent || ""}\n${m.grand || ""}`;
+      if (
+        !/extra\s+usage\s+credits?|credit\s+balance|additional\s+credits?|top-?up|buy\s+credits?/i.test(
+          ctx
+        )
+      ) {
+        continue;
+      }
+      const mm = String(m.text).match(/([\d,]+(?:\.\d+)?)/);
+      if (!mm) continue;
+      const val = parseMoney(mm[1]);
+      if (val != null && val >= 0 && val < 1_000_000) {
+        parsed.extraCredits = val;
+        parsed.extraCreditsLabel = `$${val.toFixed(2)}`;
+        break;
+      }
+    }
+  }
+
+  // Text path again on body (covers cases where network path skipped it)
+  if (
+    (parsed.extraCredits == null || Number.isNaN(parsed.extraCredits)) &&
+    dom.bodyText
+  ) {
+    const fromText = parseExtraCredits(
+      dom.bodyText.replace(/\n+/g, " ").replace(/ {2,}/g, " "),
+      dom.bodyText,
+      (dom.bodyText || "")
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean)
+    );
+    if (fromText.extraCredits != null) {
+      parsed.extraCredits = fromText.extraCredits;
+      parsed.extraCreditsLabel = fromText.extraCreditsLabel;
+    }
+  }
+
   if (parsed.overallFound || parsed.categories.length > 0) {
     parsed.usageSection = true;
   }
@@ -579,8 +765,12 @@ function parseFlexibleApi(data, depth = 0) {
   }
 
   if (typeof data === "object") {
+    // Credit balance payloads (wallet / prepaid / top-up)
+    const creditVal = extractCreditsFromObject(data);
     // Direct match our shape
     if (data.overallPercent != null || data.overall_percent != null) {
+      const credits =
+        num(data.extraCredits ?? data.extra_credits) ?? creditVal;
       return {
         overallPercent: clampPct(
           num(data.overallPercent ?? data.overall_percent) ?? 0
@@ -589,8 +779,10 @@ function parseFlexibleApi(data, depth = 0) {
         resetsDate: data.resetsDate || data.resets_date || "",
         resetsTime: data.resetsTime || data.resets_time || "",
         resetsDisplay: data.resetsDisplay || data.resets_display || "",
-        extraCredits: num(data.extraCredits ?? data.extra_credits),
-        extraCreditsLabel: data.extraCreditsLabel || null,
+        extraCredits: credits,
+        extraCreditsLabel:
+          data.extraCreditsLabel ||
+          (credits != null ? `$${Number(credits).toFixed(2)}` : null),
       };
     }
 
@@ -627,6 +819,10 @@ function parseFlexibleApi(data, depth = 0) {
             r.resetsDisplay = reset;
             r.resetsDate = reset;
           }
+          if (r.extraCredits == null && creditVal != null) {
+            r.extraCredits = creditVal;
+            r.extraCreditsLabel = `$${Number(creditVal).toFixed(2)}`;
+          }
           return r;
         }
       }
@@ -636,7 +832,90 @@ function parseFlexibleApi(data, depth = 0) {
     for (const v of Object.values(data)) {
       if (v && typeof v === "object") {
         const r = parseFlexibleApi(v, depth + 1);
-        if (r) return r;
+        if (r) {
+          if (r.extraCredits == null && creditVal != null) {
+            r.extraCredits = creditVal;
+            r.extraCreditsLabel = `$${Number(creditVal).toFixed(2)}`;
+          }
+          return r;
+        }
+      }
+    }
+
+    // Do not return credit-only objects as a usage snapshot — they would
+    // stomp real overall % with 0. Credits are merged via extractCreditsFromNetwork.
+  }
+  return null;
+}
+
+/** Scan captured network JSON bodies for a credit balance. */
+function extractCreditsFromNetwork(bodies) {
+  for (const raw of bodies) {
+    try {
+      const data = typeof raw === "string" ? JSON.parse(raw) : raw;
+      const val = findCreditsDeep(data, 0);
+      if (val != null) return val;
+    } catch {
+      /* not json */
+    }
+  }
+  return null;
+}
+
+function findCreditsDeep(data, depth) {
+  if (!data || depth > 8) return null;
+  if (Array.isArray(data)) {
+    for (const item of data) {
+      const v = findCreditsDeep(item, depth + 1);
+      if (v != null) return v;
+    }
+    return null;
+  }
+  if (typeof data === "object") {
+    const direct = extractCreditsFromObject(data);
+    if (direct != null) return direct;
+    for (const v of Object.values(data)) {
+      if (v && typeof v === "object") {
+        const found = findCreditsDeep(v, depth + 1);
+        if (found != null) return found;
+      }
+    }
+  }
+  return null;
+}
+
+/** Pull prepaid / extra credit balance from common API field names. */
+function extractCreditsFromObject(data) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+  const keys = [
+    "extraCredits",
+    "extra_credits",
+    "extraUsageCredits",
+    "extra_usage_credits",
+    "creditBalance",
+    "credit_balance",
+    "creditsBalance",
+    "credits_balance",
+    "prepaidBalance",
+    "prepaid_balance",
+    "topupBalance",
+    "top_up_balance",
+    "topUpBalance",
+    "walletBalance",
+    "wallet_balance",
+    "usageCredits",
+    "usage_credits",
+  ];
+  for (const k of keys) {
+    if (k in data) {
+      const v = num(data[k]);
+      if (v != null && v >= 0) return v;
+      // Nested { amount: 15 } / { value: "15.00" }
+      if (data[k] && typeof data[k] === "object") {
+        const nested = num(
+          data[k].amount ?? data[k].value ?? data[k].balance ?? data[k].usd
+        );
+        if (nested != null && nested >= 0) return nested;
       }
     }
   }
@@ -858,7 +1137,9 @@ async function main() {
           text &&
           text.length < 2_000_000 &&
           (text.includes("%") ||
-            /usage|quota|rateLimit|rate_limit|percent/i.test(text))
+            /usage|quota|rateLimit|rate_limit|percent|credit|balance|billing|wallet|top.?up|prepaid/i.test(
+              text
+            ))
         ) {
           networkBodies.push(text);
         }
@@ -919,7 +1200,10 @@ async function main() {
       );
     }
 
-    // Prefer network JSON if we snagged something useful
+    // Prefer network JSON for usage %, but always merge text/DOM for credits + resets
+    let textParsed = parseUsageText(dom.bodyText);
+    textParsed = enrichFromDom(textParsed, dom);
+
     let parsed = tryParseNetworkJson(networkBodies);
     if (parsed) {
       // Network path: treat any numeric overall (incl. 0) as found when present
@@ -927,9 +1211,19 @@ async function main() {
         parsed.overallFound = true;
       }
       parsed.usageSection = hasUsageData(parsed);
+      parsed = mergeParsed(parsed, textParsed);
     } else {
-      parsed = parseUsageText(dom.bodyText);
-      parsed = enrichFromDom(parsed, dom);
+      parsed = textParsed;
+    }
+
+    // Dedicated network credit scan (wallet/billing APIs without usage %)
+    const netCredits = extractCreditsFromNetwork(networkBodies);
+    if (
+      netCredits != null &&
+      (parsed.extraCredits == null || Number.isNaN(parsed.extraCredits))
+    ) {
+      parsed.extraCredits = netCredits;
+      parsed.extraCreditsLabel = `$${Number(netCredits).toFixed(2)}`;
     }
 
     if (!hasUsageData(parsed)) {
@@ -938,8 +1232,20 @@ async function main() {
         await page.mouse.wheel(0, 800);
         await page.waitForTimeout(2000);
         dom = await deepScrape(page);
-        parsed = parseUsageText(dom.bodyText);
-        parsed = enrichFromDom(parsed, dom);
+        textParsed = parseUsageText(dom.bodyText);
+        textParsed = enrichFromDom(textParsed, dom);
+        if (parsed && hasUsageData(parsed)) {
+          parsed = mergeParsed(parsed, textParsed);
+        } else {
+          parsed = textParsed;
+        }
+        if (
+          (parsed.extraCredits == null || Number.isNaN(parsed.extraCredits)) &&
+          netCredits != null
+        ) {
+          parsed.extraCredits = netCredits;
+          parsed.extraCreditsLabel = `$${Number(netCredits).toFixed(2)}`;
+        }
       } catch {
         /* ignore */
       }

@@ -205,13 +205,20 @@ function friendlyError(raw: string): string {
   return raw.length > 400 ? raw.slice(0, 400) + "…" : raw;
 }
 
-async function updateTrayTooltip(percent: number | null, resetsHint?: string) {
+async function updateTrayTooltip(
+  percent: number | null,
+  resetsHint?: string,
+  credits?: number | null
+) {
   if (!IN_TAURI) return;
   let text = "Grok Usage";
   if (percent != null && !Number.isNaN(percent)) {
     const pct = Math.round(percent);
     text = `${pct}% SuperGrok used`;
     if (resetsHint) text += ` · Resets ${resetsHint}`;
+    if (credits != null && !Number.isNaN(credits)) {
+      text += ` · Credits $${Number(credits).toFixed(2)}`;
+    }
   }
   try {
     await invoke("set_tray_tooltip", { text });
@@ -324,18 +331,22 @@ function renderUsage(data: UsageSnapshot) {
   const resetsHint = (data.resetsDate || data.resetsDisplay || "").trim();
   lastOverallPercent = data.overallPercent;
   updateSleekBar(data.overallPercent, resetsHint);
-  void updateTrayTooltip(data.overallPercent, resetsHint);
 
   const credits = data.extraCredits;
-  const hasCredits = credits != null && !Number.isNaN(credits);
+  const hasCredits = credits != null && !Number.isNaN(Number(credits));
   if (els.creditsBlock) {
     els.creditsBlock.classList.toggle("hidden", !hasCredits);
   }
   if (els.creditsValue && hasCredits) {
-    els.creditsValue.textContent =
-      data.extraCreditsLabel?.trim() ||
-      `$${Number(credits).toFixed(2)}`;
+    // Always show a clean $X.XX value
+    els.creditsValue.textContent = `$${Number(credits).toFixed(2)}`;
   }
+
+  void updateTrayTooltip(
+    data.overallPercent,
+    resetsHint,
+    hasCredits ? Number(credits) : null
+  );
 
   if (els.dataNote) {
     if (data.note) {
